@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NHS Board Papers Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .paper-card {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .analysis-result {
+            white-space: pre-wrap;
+            font-family: monospace;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">NHS Board Papers Analyzer</a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h2>NHS Trust and ICB Board Papers</h2>
+                    </div>
+                    <div class="card-body">
+                        <p>
+                            This application scrapes NHS Trust and ICB websites to find board papers from 2024 onwards. 
+                            The scraper runs automatically every two weeks to find new papers, and results are displayed chronologically.
+                        </p>
+                        
+                        <div class="d-flex align-items-center mb-3">
+                            <button id="runCrawlerBtn" class="btn btn-primary me-3">Run Crawler Now</button>
+                            <div id="crawlerStatus" class="d-none">
+                                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                <span>Crawling websites... This may take a while.</span>
+                            </div>
+                        </div>
+                        
+                        {% if results and results.last_run %}
+                            <div class="alert alert-info">
+                                Last crawl: {{ results.last_run }}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- New card for testing specific URLs -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h3>Test Specific Websites</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>
+                            Use this form to test specific NHS Trust or ICB websites for board papers from 2024 onwards.
+                            Only board papers from January 2024 will be included, displayed in chronological order.
+                        </p>
+                        
+                        <div class="mb-3">
+                            <label for="urlInput" class="form-label">Website URLs (one per line or use @ prefix for multiple URLs)</label>
+                            <textarea id="urlInput" class="form-control" rows="4" placeholder="Regular format:&#10;https://www.example.nhs.uk/&#10;&#10;OR with @ prefix:&#10;@https://www.hct.nhs.uk/ @https://www.midandsouthessex.ics.nhs.uk/"></textarea>
+                            <small class="text-muted">For multiple URLs, you can either enter one URL per line or use the @ prefix format (e.g., "@https://www.hct.nhs.uk/ @https://www.midandsouthessex.ics.nhs.uk/")</small>
+                        </div>
+                        
+                        <div class="d-flex align-items-center mb-3">
+                            <button id="testUrlsBtn" class="btn btn-success me-3">Test URLs</button>
+                            <div id="testUrlsStatus" class="d-none">
+                                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                <span>Testing URLs... This may take a while.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h3>Board Papers (2024 Onwards)</h3>
+                        <div>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="showNewOnly">
+                                <label class="form-check-label" for="showNewOnly">Show New Papers Only</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="papersList">
+                            <div class="table-responsive">
+                                <table class="table table-striped">
+                                    <thead>
+                                        <tr>
+                                            <th>Title</th>
+                                            <th>Organization</th>
+                                            <th>Type</th>
+                                            <th>Date</th>
+                                            <th>Virtual Ward</th>
+                                            <th>Summary</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="papersTableBody">
+                                        {% if results and results.board_papers %}
+                                            {% for paper in results.board_papers %}
+                                                <tr class="paper-row {% if paper.is_new %}table-success new-paper{% endif %}">
+                                                    <td>{{ paper.title }}</td>
+                                                    <td>{{ paper.organization }}</td>
+                                                    <td>{{ paper.org_type }}</td>
+                                                    <td>{{ paper.date }}</td>
+                                                    <td>
+                                                        {% if paper.virtual_ward_mentioned %}
+                                                            <span class="badge bg-success">Yes</span>
+                                                        {% else %}
+                                                            <span class="badge bg-secondary">No</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if paper.virtual_ward_mentioned %}
+                                                            <button type="button" class="btn btn-sm btn-info" 
+                                                                    data-bs-toggle="modal" 
+                                                                    data-bs-target="#summaryModal"
+                                                                    data-summary="{{ paper.virtual_ward_summary }}"
+                                                                    data-title="{{ paper.title }}">
+                                                                View Summary
+                                                            </button>
+                                                        {% else %}
+                                                            {{ paper.virtual_ward_summary }}
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        <a href="{{ paper.url }}" target="_blank" class="btn btn-sm btn-primary">View</a>
+                                                    </td>
+                                                </tr>
+                                            {% endfor %}
+                                        {% else %}
+                                            <tr>
+                                                <td colspan="7" class="text-center">No board papers found yet. Run the crawler to start finding papers.</td>
+                                            </tr>
+                                        {% endif %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-5">
+        <h1>NHS Board Papers Analyzer</h1>
+        
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Latest Results</h5>
+                        <div id="results"></div>
+                        <div id="loading" class="loading">
+                            <div class="spinner-border" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Analyzing papers... This may take a few minutes.</p>
+                        </div>
+                        <button id="analyzeSelected" class="btn btn-success mt-3" style="display: none;">
+                            Analyze Selected Papers
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Analysis Results</h5>
+                        <div id="analysisResults"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Virtual Ward Summary Modal -->
+    <div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="summaryModalLabel">Virtual Ward Summary</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 id="modalPaperTitle"></h6>
+                    <div id="modalSummaryContent" class="mt-3"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        // Initialize tooltips
+        document.addEventListener('DOMContentLoaded', function() {
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+            
+            // Handle summary modal
+            const summaryModal = document.getElementById('summaryModal');
+            if (summaryModal) {
+                summaryModal.addEventListener('show.bs.modal', function (event) {
+                    const button = event.relatedTarget;
+                    const summary = button.getAttribute('data-summary');
+                    const title = button.getAttribute('data-title');
+                    
+                    const modalTitle = this.querySelector('#modalPaperTitle');
+                    const modalContent = this.querySelector('#modalSummaryContent');
+                    
+                    modalTitle.textContent = title;
+                    modalContent.textContent = summary;
+                });
+            }
+        });
+        
+        document.getElementById('runCrawlerBtn').addEventListener('click', async () => {
+            const status = document.getElementById('crawlerStatus');
+            status.textContent = 'Crawler is running...';
+            
+            try {
+                const response = await fetch('/run-crawler');
+                const data = await response.json();
+                if (data.success) {
+                    status.textContent = 'Crawler completed successfully!';
+                    loadResults();
+                } else {
+                    status.textContent = 'Error: ' + data.error;
+                }
+            } catch (error) {
+                status.textContent = 'Error: ' + error.message;
+            }
+        });
+
+        async function loadResults() {
+            const resultsDiv = document.getElementById('results');
+            const analyzeBtn = document.getElementById('analyzeSelected');
+            
+            try {
+                const response = await fetch('/latest-results');
+                const data = await response.json();
+                
+                if (data && data.papers) {
+                    resultsDiv.innerHTML = `
+                        <div class="mb-3">
+                            <button class="btn btn-sm btn-outline-primary" onclick="selectAll()">Select All</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="deselectAll()">Deselect All</button>
+                        </div>
+                    `;
+                    
+                    data.papers.forEach(paper => {
+                        const paperDiv = document.createElement('div');
+                        paperDiv.className = 'paper-card';
+                        paperDiv.innerHTML = `
+                            <div class="form-check">
+                                <input class="form-check-input paper-checkbox" type="checkbox" value="${paper.url}" id="paper_${paper.url}">
+                                <label class="form-check-label" for="paper_${paper.url}">
+                                    <strong>${paper.title}</strong><br>
+                                    <small class="text-muted">${paper.date || 'No date'}</small><br>
+                                    <a href="${paper.url}" target="_blank">View PDF</a>
+                                </label>
+                            </div>
+                        `;
+                        resultsDiv.appendChild(paperDiv);
+                    });
+                    
+                    analyzeBtn.style.display = 'block';
+                } else {
+                    resultsDiv.innerHTML = '<p>No results found</p>';
+                    analyzeBtn.style.display = 'none';
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<p>Error loading results: ${error.message}</p>`;
+                analyzeBtn.style.display = 'none';
+            }
+        }
+
+        function selectAll() {
+            document.querySelectorAll('.paper-checkbox').forEach(cb => cb.checked = true);
+        }
+
+        function deselectAll() {
+            document.querySelectorAll('.paper-checkbox').forEach(cb => cb.checked = false);
+        }
+
+        document.getElementById('analyzeSelected').addEventListener('click', async () => {
+            const selectedPapers = Array.from(document.querySelectorAll('.paper-checkbox:checked')).map(cb => cb.value);
+            
+            if (selectedPapers.length === 0) {
+                alert('Please select at least one paper to analyze');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const analysisResults = document.getElementById('analysisResults');
+            
+            loading.style.display = 'block';
+            analysisResults.innerHTML = '';
+            
+            try {
+                const response = await fetch('/analyze-papers', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        urls: selectedPapers
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    data.results.forEach(result => {
+                        const resultDiv = document.createElement('div');
+                        resultDiv.className = 'mb-4';
+                        resultDiv.innerHTML = `
+                            <h6>Analysis for: <a href="${result.url}" target="_blank">View PDF</a></h6>
+                            <div class="analysis-result">${result.analysis}</div>
+                        `;
+                        analysisResults.appendChild(resultDiv);
+                    });
+                } else {
+                    analysisResults.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                }
+            } catch (error) {
+                analysisResults.innerHTML = `<p class="text-danger">Error: ${error.message}</p>`;
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        // Load results when page loads
+        loadResults();
+    </script>
+</body>
+</html> 

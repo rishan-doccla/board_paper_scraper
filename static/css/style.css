@@ -1,0 +1,53 @@
+/* NHS Board Paper Scraper Styles */
+
+body {
+    background-color: #f8f9fa;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.navbar {
+    margin-bottom: 20px;
+}
+
+.card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+.card-header {
+    background-color: #f1f8ff;
+}
+
+.new-paper {
+    animation: highlight 5s;
+}
+
+@keyframes highlight {
+    0% {
+        background-color: #d4edda;
+    }
+    100% {
+        background-color: inherit;
+    }
+}
+
+#runCrawlerBtn:disabled {
+    cursor: not-allowed;
+}
+
+#crawlerStatus {
+    color: #0d6efd;
+}
+
+.table th {
+    font-weight: 600;
+}
+
+.alert {
+    border-radius: 4px;
+    padding: 12px 20px;
+}
+
+.hidden {
+    display: none;
+} 
