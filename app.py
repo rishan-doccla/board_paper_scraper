@@ -30,7 +30,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 RESULTS_FILE = os.path.join(DATA_DIR, "board_papers.json")
 
 # Add Gemini API key
-GEMINI_API_KEY = "AIzaSyAXgiEx6sL4z_O2FUGrSuFBsXx7m9qrzf4"
+GEMINI_API_KEY = "AIzaSyCcPBK0IZdA2UdXPPF_DJ5ObtQqM30eqUo"
 
 # Initialize PDF analyzer
 pdf_analyzer = PDFAnalyzer(GEMINI_API_KEY)
@@ -452,13 +452,46 @@ def analyze_papers():
             "success": False
         }), 500
 
+@app.route('/test-analysis')
+def test_analysis():
+    """Test route to analyze a known working PDF"""
+    try:
+        # Use the local PDF file we know works
+        pdf_path = "data/pdfs/blmk_march_2024.pdf"
+        
+        if not os.path.exists(pdf_path):
+            return jsonify({
+                "error": f"Test PDF file not found at {pdf_path}",
+                "success": False
+            }), 404
+        
+        # Initialize analyzer with our API key
+        analyzer = PDFAnalyzer(GEMINI_API_KEY)
+        
+        # Analyze the PDF
+        results = analyzer.analyze_pdf_url(pdf_path)
+        
+        return jsonify({
+            "results": results,
+            "success": True
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "success": False
+        }), 500
+
 if __name__ == '__main__':
     # Load existing data
     latest_results = load_existing_data()
+    
+    # Print API key info for debugging (first 8 chars only)
+    print(f"Using API key starting with: {GEMINI_API_KEY[:8]}...")
     
     # Schedule the crawler to run every two weeks
     scheduler.add_job(run_crawler, 'interval', weeks=2)
     scheduler.start()
     
     # Start the flask app
-    app.run(debug=True, host='0.0.0.0', port=5001) 
+    app.run(debug=True, host='0.0.0.0', port=5002) 

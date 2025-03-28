@@ -7,6 +7,11 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 import tempfile
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -20,12 +25,13 @@ class PDFAnalyzer:
     def __init__(self, api_key=None):
         """Initialize the PDFAnalyzer with optional API key."""
         # Use provided API key or get from environment
-        api_key = api_key or os.getenv('GEMINI_API_KEY')
-        if not api_key:
+        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        if not self.api_key:
             raise ValueError("Gemini API key is required")
         
         # Configure Gemini
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=self.api_key)
+        logger.info("PDFAnalyzer initialized with API key")
     
     def clean_text(self, text: str) -> str:
         """Clean and normalize text from PDF."""
@@ -39,11 +45,17 @@ class PDFAnalyzer:
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text content from a PDF file."""
-        reader = PdfReader(pdf_path)
-        text = ""
-        for page in reader.pages:
-            text += self.clean_text(page.extract_text()) + " "
-        return text.strip()
+        logger.info(f"Extracting text from PDF: {pdf_path}")
+        try:
+            reader = PdfReader(pdf_path)
+            text = ""
+            for page in reader.pages:
+                text += self.clean_text(page.extract_text()) + " "
+            logger.info(f"Successfully extracted {len(reader.pages)} pages")
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {str(e)}")
+            raise
     
     def chunk_text(self, text: str, chunk_size: int = 10000) -> List[str]:
         """Split text into chunks to avoid token limits."""
@@ -64,10 +76,12 @@ class PDFAnalyzer:
         if current_chunk:
             chunks.append(' '.join(current_chunk))
         
+        logger.info(f"Split text into {len(chunks)} chunks")
         return chunks
     
     def analyze_text_chunk(self, text: str) -> List[Dict]:
         """Analyze a chunk of text for virtual ward mentions."""
+        logger.info("Analyzing text chunk with Gemini API")
         prompt = """Analyze this text for mentions of 'virtual ward' or related concepts.
     
     For each mention found, respond in this EXACT format (including the triple backticks):
@@ -87,15 +101,16 @@ class PDFAnalyzer:
     Text to analyze:
     {text}"""
         
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        response = model.generate_content(prompt.format(text=text))
-        content = response.text.strip()
-        
-        # If no mentions found
-        if content == "NO_MENTIONS_FOUND":
-            return []
-            
         try:
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content(prompt.format(text=text))
+            content = response.text.strip()
+            
+            # If no mentions found
+            if content == "NO_MENTIONS_FOUND":
+                logger.info("No virtual ward mentions found in chunk")
+                return []
+                
             # Parse the response format
             mentions = []
             sections = content.split('---')
@@ -127,17 +142,18 @@ class PDFAnalyzer:
                 if len(mention) == 3:  # Only add if we found all three parts
                     mentions.append(mention)
             
+            logger.info(f"Found {len(mentions)} virtual ward mentions in chunk")
             return mentions
+            
         except Exception as e:
-            print(f"Error parsing response: {str(e)}")
-            print(f"Raw response:\n{content}")
-            return []
+            logger.error(f"Error analyzing text chunk: {str(e)}")
+            logger.error(f"Raw response:\n{content if 'content' in locals() else 'No response'}")
+            raise
     
     def analyze_pdf_file(self, pdf_path: str, verbose: bool = True) -> List[Dict]:
         """Analyze a PDF file for virtual ward mentions."""
         if verbose:
-            print(f"\nAnalyzing: {pdf_path}")
-            print("-" * 50)
+            logger.info(f"\nAnalyzing: {pdf_path}")
         
         try:
             # Extract text from PDF
@@ -150,43 +166,55 @@ class PDFAnalyzer:
             all_results = []
             for i, chunk in enumerate(chunks, 1):
                 if verbose:
-                    print(f"Processing chunk {i} of {len(chunks)}...")
+                    logger.info(f"Processing chunk {i} of {len(chunks)}...")
                 results = self.analyze_text_chunk(chunk)
                 all_results.extend(results)
             
             return all_results
         except Exception as e:
-            print(f"Error processing {pdf_path}: {str(e)}")
-            return []
+            logger.error(f"Error processing {pdf_path}: {str(e)}")
+            raise
     
     def analyze_pdf_url(self, url: str, verbose: bool = True) -> Dict[str, Any]:
         """
         Download and analyze a PDF from a URL.
         
         Args:
-            url: URL of the PDF to analyze
+            url: URL of the PDF to analyze or path to local PDF file
             verbose: Whether to print progress messages
             
         Returns:
             Dictionary with analysis results
         """
         try:
-            if verbose:
-                print(f"Downloading PDF from {url}")
+            # Check if this is a local file
+            if os.path.exists(url):
+                logger.info(f"Analyzing local PDF file: {url}")
+                mentions = self.analyze_pdf_file(url, verbose=verbose)
+            else:
+                # Handle URL
+                if verbose:
+                    logger.info(f"Downloading PDF from {url}")
                 
-            # Download the PDF
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            
-            # Create a temporary file
-            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                temp_path = temp_file.name
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        temp_file.write(chunk)
-                        
-            # Analyze the PDF
-            mentions = self.analyze_pdf_file(temp_path, verbose=verbose)
+                # Download the PDF with proper headers
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                response = requests.get(url, headers=headers, stream=True, verify=False)
+                response.raise_for_status()
+                
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            temp_file.write(chunk)
+                            
+                # Analyze the PDF
+                mentions = self.analyze_pdf_file(temp_path, verbose=verbose)
+                
+                # Clean up the temporary file
+                os.unlink(temp_path)
             
             # Create a summary if mentions were found
             if mentions:
@@ -201,6 +229,7 @@ class PDFAnalyzer:
                     "summary": summary,
                     "detailed_mentions": mentions
                 }
+                logger.info(f"Found {len(mentions)} virtual ward mentions")
             else:
                 result = {
                     "success": True,
@@ -209,13 +238,12 @@ class PDFAnalyzer:
                     "summary": "No mentions of virtual wards found in this document.",
                     "detailed_mentions": []
                 }
+                logger.info("No virtual ward mentions found")
                 
-            # Clean up the temporary file
-            os.unlink(temp_path)
-            
             return result
             
         except Exception as e:
+            logger.error(f"Error analyzing PDF: {str(e)}")
             return {
                 "success": False,
                 "virtual_ward_mentioned": False,
@@ -249,7 +277,7 @@ class PDFAnalyzer:
         
         for i, url in enumerate(urls, 1):
             if verbose:
-                print(f"Analyzing PDF {i} of {len(urls)}: {url}")
+                logger.info(f"Analyzing PDF {i} of {len(urls)}: {url}")
                 
             try:
                 # Analyze the PDF
@@ -261,8 +289,7 @@ class PDFAnalyzer:
                 results.append(analysis)
                 
             except Exception as e:
-                if verbose:
-                    print(f"Error analyzing {url}: {str(e)}")
+                logger.error(f"Error analyzing {url}: {str(e)}")
                     
                 results.append({
                     "url": url,
@@ -284,15 +311,15 @@ if __name__ == "__main__":
     # Print results in a readable format
     for filename, mentions in results.items():
         if not mentions:
-            print(f"\nNo virtual ward mentions found in: {filename}")
+            logger.info(f"\nNo virtual ward mentions found in: {filename}")
             continue
             
-        print(f"\nFound {len(mentions)} mentions in: {filename}")
-        print("-" * 50)
+        logger.info(f"\nFound {len(mentions)} mentions in: {filename}")
+        logger.info("-" * 50)
         
         for i, mention in enumerate(mentions, 1):
-            print(f"\nMention {i}:")
-            print(f"Quote: {mention['mention']}")
-            print(f"Summary: {mention['summary']}")
-            print(f"Context: {mention['page_context']}")
-            print("-" * 30) 
+            logger.info(f"\nMention {i}:")
+            logger.info(f"Quote: {mention['mention']}")
+            logger.info(f"Summary: {mention['summary']}")
+            logger.info(f"Context: {mention['page_context']}")
+            logger.info("-" * 30) 
