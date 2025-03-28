@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const showNewOnlyCheckbox = document.getElementById('showNewOnly');
     const papersTableBody = document.getElementById('papersTableBody');
     const testUrlsBtn = document.getElementById('testUrlsBtn');
+    const scrapeOnlyBtn = document.getElementById('scrapeOnlyBtn');
     const testUrlsStatus = document.getElementById('testUrlsStatus');
     const urlInput = document.getElementById('urlInput');
     
@@ -105,6 +106,74 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Re-enable button and hide status
                 testUrlsBtn.disabled = false;
                 testUrlsStatus.classList.add('d-none');
+            });
+        });
+    }
+    
+    // Scrape Only button
+    if (scrapeOnlyBtn) {
+        scrapeOnlyBtn.addEventListener('click', function() {
+            // Get the URLs from the input
+            const urlsText = urlInput.value.trim();
+            
+            if (!urlsText) {
+                alert('Please enter at least one URL to test.');
+                return;
+            }
+            
+            // Parse URLs with @ prefix or regular line-by-line format
+            const urls = parseUrlInput(urlsText);
+            
+            if (urls.length === 0) {
+                alert('Please enter at least one valid URL to test.');
+                return;
+            }
+            
+            // Disable buttons and show status
+            scrapeOnlyBtn.disabled = true;
+            testUrlsBtn.disabled = true;
+            testUrlsStatus.classList.remove('d-none');
+            testUrlsStatus.querySelector('span:last-child').textContent = 'Scraping URLs... This may take a while.';
+            
+            // Call the API to test the URLs with scrape_only flag
+            const payload = { 
+                urls: urls,
+                scrape_only: true  // This flag tells the backend to skip PDF analysis
+            };
+            
+            fetch('/test-specific-urls', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Update the table with new results
+                    updatePapersTable(data.results.board_papers);
+                    
+                    // Show success message
+                    alert(`Scraping completed successfully! Found ${data.results.board_papers.length} papers.`);
+                    
+                    // Reload the page to show updated results
+                    window.location.reload();
+                } else {
+                    // Show error message
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error scraping URLs:', error);
+                alert('Error scraping URLs. Check the console for details.');
+            })
+            .finally(() => {
+                // Re-enable buttons and reset status
+                scrapeOnlyBtn.disabled = false;
+                testUrlsBtn.disabled = false;
+                testUrlsStatus.classList.add('d-none');
+                testUrlsStatus.querySelector('span:last-child').textContent = 'Testing URLs... This may take a while.';
             });
         });
     }

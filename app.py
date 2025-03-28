@@ -200,7 +200,7 @@ def run_crawler():
     save_results(latest_results)
     print(f"Crawler and analysis completed at {datetime.datetime.now()}")
 
-async def run_crawler_for_specific_urls(urls):
+async def run_crawler_for_specific_urls(urls, scrape_only=False):
     """Run the NHS website crawler for specific URLs"""
     # Load existing data
     existing_data = load_existing_data()
@@ -269,7 +269,7 @@ async def run_crawler_for_specific_urls(urls):
             
             # Initialize virtual ward fields
             paper["virtual_ward_mentioned"] = False
-            paper["virtual_ward_summary"] = "Not analyzed"
+            paper["virtual_ward_summary"] = "Not analyzed (scrape-only mode)" if scrape_only else "Not analyzed"
             paper["virtual_ward_mentions_count"] = 0
             
             filtered_papers.append(paper)
@@ -279,41 +279,49 @@ async def run_crawler_for_specific_urls(urls):
         paper["is_new"] = (paper["url"], paper["title"]) not in existing_papers
         paper["found_date"] = datetime.datetime.now().isoformat()
     
-    # STAGE 2: Analyze the PDFs for virtual ward mentions
-    print(f"Starting PDF analysis for virtual ward mentions...")
+    # Sort papers by date (most recent first but from 2024 onwards)
+    filtered_papers.sort(key=lambda x: x.get("sort_date", "9999-99"))
     
-    pdf_papers = [p for p in filtered_papers if p["url"].lower().endswith('.pdf') or "pdf" in p["url"].lower()]
-    print(f"Found {len(pdf_papers)} PDF papers to analyze")
+    print(f"Scraping finished at {datetime.datetime.now()}, found {len(filtered_papers)} board papers from 2024 onwards")
     
-    # Initialize the analyzer
-    analyzer = PDFAnalyzer(GEMINI_API_KEY)
-    
-    # Analyze each PDF paper
-    for i, paper in enumerate(pdf_papers, 1):
-        try:
-            print(f"Analyzing PDF {i} of {len(pdf_papers)}: {paper['title']}")
-            
-            # Analyze the PDF
-            results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
-            
-            # Find the paper in filtered_papers and update it
-            for p in filtered_papers:
-                if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                    p["virtual_ward_mentioned"] = results["virtual_ward_mentioned"]
-                    p["virtual_ward_summary"] = results["summary"]
-                    p["virtual_ward_mentions_count"] = results["mentions_count"]
-                    print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
-                    break
-                    
-        except Exception as e:
-            print(f"Error analyzing PDF {paper['url']}: {str(e)}")
-            # Find the paper in filtered_papers and update it with the error
-            for p in filtered_papers:
-                if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                    p["virtual_ward_summary"] = f"Error during analysis: {str(e)}"
-                    break
-    
-    print(f"PDF analysis completed at {datetime.datetime.now()}")
+    # STAGE 2: Analyze the PDFs for virtual ward mentions (skip if scrape_only is True)
+    if not scrape_only:
+        print(f"Starting PDF analysis for virtual ward mentions...")
+        
+        pdf_papers = [p for p in filtered_papers if p["url"].lower().endswith('.pdf') or "pdf" in p["url"].lower()]
+        print(f"Found {len(pdf_papers)} PDF papers to analyze")
+        
+        # Initialize the analyzer
+        analyzer = PDFAnalyzer(GEMINI_API_KEY)
+        
+        # Analyze each PDF paper
+        for i, paper in enumerate(pdf_papers, 1):
+            try:
+                print(f"Analyzing PDF {i} of {len(pdf_papers)}: {paper['title']}")
+                
+                # Analyze the PDF
+                results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
+                
+                # Find the paper in filtered_papers and update it
+                for p in filtered_papers:
+                    if p["url"] == paper["url"] and p["title"] == paper["title"]:
+                        p["virtual_ward_mentioned"] = results["virtual_ward_mentioned"]
+                        p["virtual_ward_summary"] = results["summary"]
+                        p["virtual_ward_mentions_count"] = results["mentions_count"]
+                        print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
+                        break
+                        
+            except Exception as e:
+                print(f"Error analyzing PDF {paper['url']}: {str(e)}")
+                # Find the paper in filtered_papers and update it with the error
+                for p in filtered_papers:
+                    if p["url"] == paper["url"] and p["title"] == paper["title"]:
+                        p["virtual_ward_summary"] = f"Error during analysis: {str(e)}"
+                        break
+        
+        print(f"PDF analysis completed at {datetime.datetime.now()}")
+    else:
+        print("Skipping PDF analysis (scrape-only mode)")
     
     return filtered_papers
 
@@ -333,12 +341,13 @@ def test_specific_urls():
     """Route to test specific URLs"""
     data = request.get_json()
     urls = data.get('urls', [])
+    scrape_only = data.get('scrape_only', False)  # Get scrape_only parameter from request
     
     if not urls:
         return jsonify({"status": "error", "message": "No URLs provided"})
     
-    # Run the crawler for specific URLs
-    papers = asyncio.run(run_crawler_for_specific_urls(urls))
+    # Run the crawler for specific URLs with scrape_only parameter
+    papers = asyncio.run(run_crawler_for_specific_urls(urls, scrape_only=scrape_only))
     
     # Create results object
     results = {
