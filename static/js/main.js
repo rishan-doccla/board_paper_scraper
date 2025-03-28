@@ -82,7 +82,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 },
                 body: JSON.stringify(payload)
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.status === 'success') {
                     // Update the table with new results
@@ -94,18 +99,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Reload the page to show updated results
                     window.location.reload();
                 } else {
-                    // Show error message
-                    alert(`Error: ${data.message}`);
+                    // Show error message in the status area
+                    testUrlsStatus.querySelector('span:last-child').textContent = `Error: ${data.message}`;
+                    testUrlsStatus.classList.remove('alert-info');
+                    testUrlsStatus.classList.add('alert-danger');
                 }
             })
             .catch(error => {
                 console.error('Error testing URLs:', error);
-                alert('Error testing URLs. Check the console for details.');
+                // Show error in the status area
+                testUrlsStatus.querySelector('span:last-child').textContent = `Error testing URLs: ${error.message}`;
+                testUrlsStatus.classList.remove('alert-info');
+                testUrlsStatus.classList.add('alert-danger');
             })
             .finally(() => {
-                // Re-enable button and hide status
+                // Re-enable button but don't hide status if there was an error
                 testUrlsBtn.disabled = false;
-                testUrlsStatus.classList.add('d-none');
+                if (!testUrlsStatus.classList.contains('alert-danger')) {
+                    testUrlsStatus.classList.add('d-none');
+                }
+                testUrlsStatus.querySelector('span:last-child').textContent = 'Testing URLs... This may take a while.';
             });
         });
     }
@@ -148,7 +161,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 },
                 body: JSON.stringify(payload)
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.status === 'success') {
                     // Update the table with new results
@@ -160,19 +178,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Reload the page to show updated results
                     window.location.reload();
                 } else {
-                    // Show error message
-                    alert(`Error: ${data.message}`);
+                    // Show error message in the status area
+                    testUrlsStatus.querySelector('span:last-child').textContent = `Error: ${data.message}`;
+                    testUrlsStatus.classList.remove('alert-info');
+                    testUrlsStatus.classList.add('alert-danger');
                 }
             })
             .catch(error => {
                 console.error('Error scraping URLs:', error);
-                alert('Error scraping URLs. Check the console for details.');
+                // Show error in the status area
+                testUrlsStatus.querySelector('span:last-child').textContent = `Error scraping URLs: ${error.message}`;
+                testUrlsStatus.classList.remove('alert-info');
+                testUrlsStatus.classList.add('alert-danger');
             })
             .finally(() => {
-                // Re-enable buttons and reset status
+                // Re-enable buttons but don't hide status if there was an error
                 scrapeOnlyBtn.disabled = false;
                 testUrlsBtn.disabled = false;
-                testUrlsStatus.classList.add('d-none');
+                if (!testUrlsStatus.classList.contains('alert-danger')) {
+                    testUrlsStatus.classList.add('d-none');
+                }
                 testUrlsStatus.querySelector('span:last-child').textContent = 'Testing URLs... This may take a while.';
             });
         });

@@ -221,49 +221,104 @@ class NHSCrawler:
             
         return organizations
 
-    def should_follow_link(self, link_text: str, link_url: str = "") -> bool:
-        """Determine if we should follow a navigation link based on its text and URL"""
-        # Skip links that are likely not useful
-        if not link_text and not link_url:
+    def should_follow_link(self, text: str, url: str) -> bool:
+        """Determine if a link should be followed for deeper crawling"""
+        text_lower = text.lower()
+        url_lower = url.lower()
+        
+        # Skip if it's a document
+        if any(url_lower.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']):
             return False
             
-        # Skip social media and external links
-        skip_domains = ['twitter.com', 'facebook.com', 'youtube.com', 'linkedin.com', 'instagram.com']
-        if any(domain in str(link_url).lower() for domain in skip_domains):
-            return False
-            
-        # Always follow links that are likely to lead to board papers
-        high_priority_keywords = [
-            "board", "papers", "meeting", "governance", "minutes", "agenda", 
-            "trust board", "board of directors", "publications"
+        # Skip common non-board sections
+        skip_sections = [
+            "news", "contact", "search", "accessibility", "privacy", "cookies",
+            "terms", "sitemap", "feedback", "complaints", "jobs", "careers",
+            "vacancies", "events", "training", "login", "register", "social",
+            "twitter", "facebook", "youtube", "linkedin", "instagram"
         ]
-        
-        # Convert to lowercase for case-insensitive matching
-        link_text_lower = link_text.lower() if link_text else ""
-        link_url_lower = link_url.lower() if link_url else ""
-        
-        # Check for pagination links
-        if self.is_pagination_link(link_text_lower, link_url_lower):
+        if any(section in url_lower or section in text_lower for section in skip_sections):
+            return False
+            
+        # Strong indicators - these sections are very likely to contain board papers
+        strong_indicators = [
+            "board-papers", "board-meetings", "trust-board", "governing-body",
+            "public-board", "committee-papers", "meeting-papers", "board-minutes",
+            "trust-minutes", "governing-body-papers", "icb-board", "integrated-care-board"
+        ]
+        if any(indicator in url_lower.replace("/", "-") for indicator in strong_indicators):
             return True
-        
-        # Check for high priority keywords
-        for keyword in high_priority_keywords:
-            if keyword in link_text_lower or keyword in link_url_lower:
-                return True
-        
-        # Medium priority keywords
-        medium_priority_keywords = [
-            "committee", "publication", "foi", "freedom of information",
-            "annual report", "corporate", "council", "icb", "icp", "strategy",
-            "about us", "about", "who we are", "what we do"
+            
+        # Check for promising combinations of terms
+        term_combinations = [
+            ["board", "papers"],
+            ["board", "meetings"],
+            ["trust", "board"],
+            ["governing", "body"],
+            ["public", "board"],
+            ["committee", "papers"],
+            ["meeting", "papers"],
+            ["board", "minutes"],
+            ["trust", "minutes"],
+            ["icb", "board"],
+            ["integrated", "care", "board"]
         ]
-        
-        for keyword in medium_priority_keywords:
-            if keyword in link_text_lower or keyword in link_url_lower:
+        for combo in term_combinations:
+            if all(term in text_lower or term in url_lower for term in combo):
                 return True
                 
+        # Check for common paths that might lead to board papers
+        common_paths = [
+            "/about-us/board",
+            "/about-us/our-board",
+            "/about-us/trust-board",
+            "/about-us/governing-body",
+            "/about/board",
+            "/about/trust-board",
+            "/board",
+            "/trust-board",
+            "/governing-body",
+            "/meetings",
+            "/papers",
+            "/minutes",
+            "/corporate/board",
+            "/corporate/governing-body",
+            "/corporate/meetings",
+            "/corporate/papers"
+        ]
+        if any(path in url_lower for path in common_paths):
+            return True
+            
+        # Check for promising text in link
+        promising_terms = [
+            "view all board papers",
+            "view board papers",
+            "view papers",
+            "view minutes",
+            "download papers",
+            "download minutes",
+            "past meetings",
+            "previous meetings",
+            "meeting archive",
+            "papers archive",
+            "minutes archive"
+        ]
+        if any(term in text_lower for term in promising_terms):
+            return True
+            
+        # Check for dates in text that might indicate meeting listings
+        date_indicators = [
+            r'\b20(24|25)\b',  # Years 2024-2025
+            r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* +20\d{2}\b',  # Month Year
+            r'\b20\d{2} +(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b'  # Year Month
+        ]
+        if any(re.search(pattern, text_lower) for pattern in date_indicators):
+            # Only follow date links if they also have board-related terms
+            return any(term in text_lower or term in url_lower 
+                      for term in ["board", "meeting", "papers", "minutes", "governing"])
+            
         return False
-        
+
     def is_pagination_link(self, link_text: str, link_url: str) -> bool:
         """Detect if a link is for pagination"""
         # Check for common pagination patterns in text
@@ -302,99 +357,92 @@ class NHSCrawler:
         url_lower = url.lower()
         title_lower = title.lower()
         
-        # Check if it's a document
-        document_extensions = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
+        # First check if it's a document
+        document_extensions = ['.pdf', '.doc', '.docx']  # Removed .ppt, .pptx, .xls, .xlsx as they're usually supporting documents
         is_document = any(url_lower.endswith(ext) for ext in document_extensions)
         
         # Also check for URLs that contain these extensions but might have additional parameters
         if not is_document:
             is_document = any(f"{ext}?" in url_lower or f"{ext}&" in url_lower for ext in document_extensions)
             
-        # Also check for links that say "papers" or "agenda" even if they don't have a document extension
-        # (they might link to a page with the actual documents)
-        if not is_document and ("papers" in url_lower or "agenda" in url_lower or "minutes" in url_lower):
-            return True
+        if not is_document:
+            return False
+            
+        # Exclude patterns - documents we don't want
+        exclude_patterns = [
+            r'register[-_\s]?of[-_\s]?interests?',
+            r'declaration[-_\s]?of[-_\s]?interests?',
+            r'annual[-_\s]?report',
+            r'accounts',
+            r'financial[-_\s]?report',
+            r'agenda[-_\s]?only',
+            r'action[-_\s]?log',
+            r'attendance[-_\s]?record',
+            r'supporting[-_\s]?papers?',
+            r'appendix',
+            r'annex'
+        ]
         
-        # Key terms that indicate board papers
+        # If any exclude pattern matches, it's not a board paper
+        if any(re.search(pattern, title_lower) or re.search(pattern, url_lower) for pattern in exclude_patterns):
+            return False
+        
+        # Key terms that indicate actual board papers
         key_terms = [
-            "board", "director", "meeting", "trust", "governing body", "committee",
-            "minutes", "agenda", "papers", "pack", "report", "icb", "integrated care board",
-            "public board", "trust board", "board of directors", "governing body",
-            "board meeting", "board papers", "board pack", "meeting papers",
-            "board minutes", "trust minutes", "committee papers", "committee minutes"
+            "board papers",
+            "board meeting papers",
+            "trust board papers",
+            "public board papers",
+            "board pack",
+            "board minutes",
+            "minutes of the board",
+            "board meeting minutes",
+            "trust board minutes",
+            "public board minutes",
+            "board of directors minutes",
+            "governing body papers",
+            "governing body minutes",
+            "icb board papers",
+            "icb board minutes",
+            "integrated care board papers",
+            "integrated care board minutes"
         ]
         
-        # Month indicators to help identify meeting documents
-        months = [
-            "january", "february", "march", "april", "may", "june", "july",
-            "august", "september", "october", "november", "december",
-            "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
-        ]
-        
-        # Check for date patterns that often indicate meeting documents
-        has_date = bool(
-            re.search(r'\d{1,2}[._-]\d{1,2}[._-](?:20)?\d{2}', url_lower) or
-            re.search(r'\d{1,2}[._-]\d{1,2}[._-](?:20)?\d{2}', title_lower) or
-            any(month in title_lower for month in months)
-        )
-        
-        # Check for year indicators (2023, 2024, or 2025)
-        has_recent_year = any(str(year) in url_lower or str(year) in title_lower for year in [2023, 2024, 2025])
-        
-        # Strong indicators - if any of these combinations are present, it's very likely a board paper
-        if has_recent_year:
-            if any(term in url_lower or term in title_lower for term in key_terms):
-                print(f"Found likely recent board document: {title} ({url})")
-                return True
-        
-        # Check for combinations of key terms that strongly indicate a board paper
+        # Check for exact key terms first (these are strong indicators)
+        if any(term in title_lower or term in url_lower for term in key_terms):
+            return True
+            
+        # Check for combinations that must appear together
         term_combinations = [
-            ["board", "paper"],
-            ["board", "meeting"],
-            ["trust", "board"],
-            ["governing", "body"],
-            ["board", "agenda"],
+            ["board", "papers"],
             ["board", "minutes"],
-            ["director", "meeting"],
-            ["committee", "paper"],
-            ["board", "pack"],
-            ["public", "board"],
-            ["icb", "meeting"],
-            ["icb", "papers"],
-            ["integrated", "care", "board"],
-            ["please find", "papers"],
-            ["please find", "agenda"],
-            ["meeting", "papers"],
-            ["meeting", "pack"],
-            ["board", "report"],
-            ["trust", "minutes"],
-            ["governing", "papers"]
+            ["trust", "board", "papers"],
+            ["trust", "board", "minutes"],
+            ["governing", "body", "papers"],
+            ["governing", "body", "minutes"],
+            ["public", "board", "papers"],
+            ["public", "board", "minutes"]
         ]
         
         for combo in term_combinations:
-            if all(term in url_lower or term in title_lower for term in combo):
-                print(f"Found likely board document (term combination): {title} ({url})")
+            if all(term in title_lower or term in url_lower for term in combo):
                 return True
         
-        # If it has a date and key terms, it's likely a board paper
-        if has_date:
-            if any(term in url_lower or term in title_lower for term in key_terms):
-                print(f"Found likely dated board document: {title} ({url})")
-                return True
+        # If we have a date and "board" in the title/url, it's likely a board paper
+        has_date = bool(
+            re.search(r'\d{1,2}[._-]\d{1,2}[._-](?:20)?\d{2}', url_lower) or
+            re.search(r'\d{1,2}[._-]\d{1,2}[._-](?:20)?\d{2}', title_lower) or
+            any(month in title_lower for month in [
+                "january", "february", "march", "april", "may", "june", "july",
+                "august", "september", "october", "november", "december",
+                "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+            ])
+        )
         
-        # Check board paper patterns
-        for pattern in self.board_paper_patterns:
-            if re.search(pattern, url_lower) or re.search(pattern, title_lower):
-                print(f"Found likely board paper (matched pattern): {title} ({url})")
-                return True
-        
-        # If it's a document with certain keywords in the path
-        if is_document:
-            path_keywords = ["board", "meeting", "public", "trust", "papers", "minutes", "agenda"]
-            if any(keyword in url_lower.split('/')[-2:] for keyword in path_keywords):
-                print(f"Found likely board document (path keywords): {title} ({url})")
-                return True
-        
+        if has_date and ("board" in title_lower or "board" in url_lower):
+            # Additional check: must contain "papers" or "minutes" if it has a date
+            return "papers" in title_lower or "papers" in url_lower or "minutes" in title_lower or "minutes" in url_lower
+            
         return False
 
     def normalize_url(self, base_url: str, link_url: str) -> str:
@@ -414,48 +462,6 @@ class NHSCrawler:
                 return urllib.parse.urljoin(base_url, link_url)
         return link_url
 
-    async def extract_links_from_html(self, html_content: str, base_url: str) -> Dict[str, Any]:
-        """Extract all links from HTML content and categorize them"""
-        if not html_content:
-            return {"board_papers": [], "navigation_links": []}
-            
-        soup = BeautifulSoup(html_content, 'html.parser')
-        result = {
-            "board_papers": [],
-            "navigation_links": []
-        }
-        
-        # Find all links
-        for link in soup.find_all('a', href=True):
-            url = link['href']
-            title = link.get_text().strip()
-            
-            # Skip empty links, javascript, mailto, etc.
-            if not url or url.startswith(('javascript:', 'mailto:', 'tel:', '#')):
-                continue
-                
-            # Normalize the URL
-            normalized_url = self.normalize_url(base_url, url)
-            if not normalized_url:
-                continue
-                
-            # Check if it's a board paper
-            if self.is_likely_board_paper(normalized_url, title):
-                date = self.extract_date_from_title(title)
-                result["board_papers"].append({
-                    "title": title if title else os.path.basename(normalized_url),
-                    "url": normalized_url,
-                    "date": date
-                })
-            # Check if it's a navigation link we should follow
-            elif self.should_follow_link(title, normalized_url):
-                result["navigation_links"].append({
-                    "text": title,
-                    "url": normalized_url
-                })
-        
-        return result
-
     async def crawl_for_documents(self, url: str, crawler: AsyncWebCrawler) -> Dict[str, Any]:
         """Directly crawl a page looking for document links"""
         result = {
@@ -464,31 +470,28 @@ class NHSCrawler:
         }
         
         try:
-            # Simple run config
-            run_config = CrawlerRunConfig(
-                word_count_threshold=1  # Ensure we don't filter out content
-            )
-            
-            # Fetch the page
-            crawl_result = await crawler.arun(
-                url=url,
-                config=run_config
-            )
-            
-            if not crawl_result.success:
+            # Get the page content
+            response = await crawler.get(url)
+            if not response or not response.text:
                 return result
                 
-            # Check if this page is an archive page with 2023 papers
-            if "2023" in url:
-                print(f"Examining potential 2023 archive page more closely: {url}")
-                
-            # Parse HTML with BeautifulSoup
-            soup = BeautifulSoup(crawl_result.cleaned_html, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Look for any elements with "2023" to help identify archive pages
-            year_elements = soup.find_all(string=lambda text: "2023" in text if text else False)
-            if year_elements:
-                print(f"Found {len(year_elements)} elements with '2023' text on {url}")
+            # First check for frames/iframes that might contain board papers
+            frames = soup.find_all(['frame', 'iframe'])
+            for frame in frames:
+                frame_url = frame.get('src', '')
+                if frame_url:
+                    frame_url = self.normalize_url(url, frame_url)
+                    if frame_url and frame_url not in self.visited_urls:
+                        self.visited_urls.add(frame_url)
+                        try:
+                            frame_response = await crawler.get(frame_url)
+                            if frame_response and frame_response.text:
+                                frame_soup = BeautifulSoup(frame_response.text, 'html.parser')
+                                soup = BeautifulSoup(str(soup) + str(frame_soup), 'html.parser')
+                        except Exception as e:
+                            print(f"Error processing frame {frame_url}: {e}")
             
             # Look for all links
             for link in soup.find_all('a', href=True):
@@ -504,18 +507,8 @@ class NHSCrawler:
                 if not normalized_url:
                     continue
                 
-                # Special handling for potential 2023 links
-                if "2023" in normalized_url or "2023" in link_text:
-                    # Prioritize this as a navigation link if it's not a document
-                    if not any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
-                        result["navigation_links"].append({
-                            "text": link_text,
-                            "url": normalized_url
-                        })
-                        continue
-                
                 # Check if it's a document (PDF, DOC, etc.)
-                if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx']):
                     # Check if it's likely a board paper
                     if self.is_likely_board_paper(normalized_url, link_text):
                         # Extract date if available
@@ -527,12 +520,6 @@ class NHSCrawler:
                             "url": normalized_url,
                             "date": date
                         })
-                    # If not a board paper but worth navigating to
-                    elif self.should_follow_link(link_text, normalized_url):
-                        result["navigation_links"].append({
-                            "text": link_text,
-                            "url": normalized_url
-                        })
                 # If not a document but worth navigating to
                 elif self.should_follow_link(link_text, normalized_url):
                     result["navigation_links"].append({
@@ -542,47 +529,72 @@ class NHSCrawler:
             
             # Special case for tables that often contain board papers
             for table in soup.find_all('table'):
-                for row in table.find_all('tr'):
-                    cells = row.find_all(['td', 'th'])
-                    if len(cells) >= 2:  # Likely a table with title and link
-                        title_cell = cells[0].get_text().strip()
-                        
-                        # Look for links in any cell
-                        links = row.find_all('a', href=True)
-                        for link in links:
-                            link_url = link['href']
-                            link_text = link.get_text().strip() or title_cell
+                # Check if this looks like a table of board papers
+                table_text = table.get_text().lower()
+                if any(term in table_text for term in ["board", "minutes", "papers", "meeting"]):
+                    for row in table.find_all('tr'):
+                        cells = row.find_all(['td', 'th'])
+                        if len(cells) >= 2:  # Likely a table with title and link
+                            row_text = ' '.join(cell.get_text().strip() for cell in cells)
                             
-                            # Normalize the URL
-                            normalized_url = self.normalize_url(url, link_url)
-                            if not normalized_url:
-                                continue
+                            # Look for links in any cell
+                            links = row.find_all('a', href=True)
+                            for link in links:
+                                link_url = link['href']
+                                link_text = link.get_text().strip() or row_text
                                 
-                            # Special check for 2023 papers in tables
-                            if "2023" in normalized_url or "2023" in link_text or "2023" in title_cell:
-                                if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
-                                    print(f"Found likely 2023 board paper in table: {link_text or title_cell} ({normalized_url})")
-                                    date = self.extract_date_from_title(link_text or title_cell)
-                                    result["board_papers"].append({
-                                        "title": link_text or title_cell,
-                                        "url": normalized_url,
-                                        "date": date
-                                    })
+                                # Normalize the URL
+                                normalized_url = self.normalize_url(url, link_url)
+                                if not normalized_url:
                                     continue
                                 
-                            # Check if it's a document
-                            if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
-                                # Check if it's likely a board paper
-                                if self.is_likely_board_paper(normalized_url, link_text):
-                                    # Extract date if available
-                                    date = self.extract_date_from_title(link_text or title_cell)
-                                    
-                                    # Add to result
-                                    result["board_papers"].append({
-                                        "title": link_text or title_cell,
-                                        "url": normalized_url,
-                                        "date": date
-                                    })
+                                # Check if it's a document
+                                if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx']):
+                                    # Check if it's likely a board paper
+                                    if self.is_likely_board_paper(normalized_url, link_text):
+                                        # Extract date if available
+                                        date = self.extract_date_from_title(link_text)
+                                        
+                                        # Add to result
+                                        result["board_papers"].append({
+                                            "title": link_text,
+                                            "url": normalized_url,
+                                            "date": date
+                                        })
+            
+            # Look for links in list items that might contain board papers
+            for list_item in soup.find_all(['li', 'div']):
+                item_text = list_item.get_text().lower()
+                if any(term in item_text for term in ["board", "minutes", "papers", "meeting"]):
+                    for link in list_item.find_all('a', href=True):
+                        link_url = link['href']
+                        link_text = link.get_text().strip()
+                        
+                        # Normalize the URL
+                        normalized_url = self.normalize_url(url, link_url)
+                        if not normalized_url:
+                            continue
+                        
+                        # Check if it's a document
+                        if any(normalized_url.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx']):
+                            # Check if it's likely a board paper
+                            if self.is_likely_board_paper(normalized_url, link_text):
+                                # Extract date if available
+                                date = self.extract_date_from_title(link_text)
+                                
+                                # Add to result
+                                result["board_papers"].append({
+                                    "title": link_text,
+                                    "url": normalized_url,
+                                    "date": date
+                                })
+            
+            # Sort navigation links by relevance
+            result["navigation_links"].sort(
+                key=lambda x: sum(1 for term in ["board", "meeting", "minutes", "papers"] 
+                                if term in x["text"].lower() or term in x["url"].lower()),
+                reverse=True
+            )
             
         except Exception as e:
             print(f"Error in document crawling for {url}: {e}")
