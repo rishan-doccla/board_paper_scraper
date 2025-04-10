@@ -4,7 +4,7 @@ import os
 import datetime
 import json
 import asyncio
-from crawler.nhs_crawler import NHSCrawler
+from crawler.crawler import AdvancedCrawler
 from utils.config import Config
 import re
 from utils.pdf_analyzer import PDFAnalyzer
@@ -12,8 +12,8 @@ from utils.pdf_analyzer import PDFAnalyzer
 app = Flask(__name__)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
 
-# Initialize the crawler
-crawler = NHSCrawler()
+
+crawler = AdvancedCrawler()
 
 # Create a scheduler for periodic scraping
 scheduler = BackgroundScheduler()
@@ -47,15 +47,82 @@ def save_results(results):
     with open(RESULTS_FILE, 'w') as f:
         json.dump(results, f, indent=2)
 
+def process_paper_analysis(paper, analyzer, scrape_only=False):
+    """Analyze a single paper for virtual ward mentions"""
+    if scrape_only:
+        return {
+            "virtual_ward_mentioned": False,
+            "virtual_ward_summary": "Not analyzed (scrape-only mode)",
+            "virtual_ward_mentions_count": 0
+        }
+    
+    try:
+        results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
+        print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
+        return results
+    except Exception as e:
+        error_msg = f"Error analyzing PDF {paper['url']}: {str(e)}"
+        print(error_msg)
+        return {
+            "virtual_ward_mentioned": False,
+            "virtual_ward_summary": f"Error during analysis: {str(e)}",
+            "virtual_ward_mentions_count": 0
+        }
+
+def create_paper_dict(paper, org_url, existing_papers):
+    """Create a standardized paper dictionary"""
+    if type(paper) == list:
+        print(paper)
+        return {}
+    return {
+        "url": paper["url"],
+        "title": paper["title"],
+        "date": "",
+        "trust": paper["trust"],
+        "organisation_url": org_url,
+        "virtual_ward_mentioned": False,
+        "virtual_ward_summary": "Not analyzed",
+        "virtual_ward_mentions_count": 0,
+        "is_new": (paper["url"], paper["title"]) not in existing_papers,
+        "found_date": datetime.datetime.now().isoformat(),
+        "sort_date": "9999-99"
+    }
+
+def update_and_save_results(papers):
+    """Update latest results and save to file"""
+    global latest_results
+    latest_results = {
+        "last_run": datetime.datetime.now().isoformat(),
+        "board_papers": papers
+    }
+    save_results(latest_results)
+
+async def process_organization(url, existing_papers, scrape_only=False):
+    """Process a single organization's papers"""
+    print(f"\nProcessing organization: {url}")
+    papers = await crawler.deep_crawl(url)
+    org_papers = []
+    
+    for paper in papers:
+        paper_dict = create_paper_dict(paper, url, existing_papers)
+        if not scrape_only:
+            analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
+            paper_dict.update({
+                "virtual_ward_mentioned": analysis_results["virtual_ward_mentioned"],
+                "virtual_ward_summary": analysis_results["summary"],
+                "virtual_ward_mentions_count": analysis_results["mentions_count"]
+            })
+        org_papers.append(paper_dict)
+    
+    print(f"Found {len(org_papers)} papers for {url}")
+    return org_papers
+
 def run_crawler():
     """Run the NHS website crawler to find board papers"""
-    global latest_results
-    
-    # Load existing data
     existing_data = load_existing_data()
     existing_papers = {(paper["url"], paper["title"]) for paper in existing_data.get("board_papers", [])}
     
-    # Define a more comprehensive list of NHS organization URLs
+    # Define NHS organization URLs
     test_urls = [
         "https://www.hct.nhs.uk/",
         "https://bedfordshirelutonandmiltonkeynes.icb.nhs.uk/",
@@ -78,252 +145,34 @@ def run_crawler():
         "https://www.nnuh.nhs.uk/"
     ]
     
-    # Run the crawler
     print(f"Starting crawler at {datetime.datetime.now()}")
     print(f"Crawling {len(test_urls)} NHS websites")
     
-    # Use the async method to run the crawler for the specific URLs
-    papers = asyncio.run(crawler.find_board_papers_for_urls(test_urls))
+    all_papers = []
+    for test_url in test_urls:
+        org_papers = asyncio.run(process_organization(test_url, existing_papers))
+        all_papers.extend(org_papers)
+        update_and_save_results(all_papers)
+        print(f"Saved results after processing {test_url}")
     
-    # Filter for board papers from 2024 onwards
-    filtered_papers = []
-    for paper in papers:
-        # Check if it's a board paper by title or URL
-        is_board_paper = any(term in paper.get("title", "").lower() or term in paper.get("url", "").lower() 
-                            for term in ["board", "meeting", "minutes", "papers", "agenda"])
-        
-        # Check if it's from 2024 or newer
-        has_valid_year = False
-        paper_date = paper.get("date", "")
-        paper_title = paper.get("title", "")
-        paper_url = paper.get("url", "")
-        
-        # Check for year in date, title or URL
-        if "2024" in paper_date or "2025" in paper_date:
-            has_valid_year = True
-        elif "2024" in paper_title or "2025" in paper_title:
-            has_valid_year = True
-        elif "2024" in paper_url or "2025" in paper_url:
-            has_valid_year = True
-            
-        if is_board_paper and has_valid_year:
-            # Extract month and year for sorting
-            month_names = ["january", "february", "march", "april", "may", "june", 
-                          "july", "august", "september", "october", "november", "december",
-                          "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-            
-            # Default sort value (end of list)
-            paper["sort_date"] = "9999-99"
-            
-            # Try to extract year and month
-            year = None
-            month = None
-            
-            # Look for year first
-            year_match = re.search(r'20(24|25)', paper_date + " " + paper_title + " " + paper_url)
-            if year_match:
-                year = "20" + year_match.group(1)
-                
-                # Then look for month
-                for i, month_name in enumerate(month_names):
-                    month_i = i % 12 + 1  # Convert to 1-12
-                    if month_name in (paper_date + " " + paper_title).lower():
-                        month = str(month_i).zfill(2)  # pad with zero
-                        break
-                
-                # If we found both year and month
-                if year and month:
-                    paper["sort_date"] = f"{year}-{month}"
-                elif year:
-                    paper["sort_date"] = f"{year}-00"
-            
-            # Initialize virtual ward fields without analyzing yet
-            paper["virtual_ward_mentioned"] = False
-            paper["virtual_ward_summary"] = "Not analyzed"
-            paper["virtual_ward_mentions_count"] = 0
-            
-            filtered_papers.append(paper)
-    
-    # Mark new papers
-    for paper in filtered_papers:
-        paper["is_new"] = (paper["url"], paper["title"]) not in existing_papers
-        paper["found_date"] = datetime.datetime.now().isoformat()
-    
-    # Sort papers by date (most recent first but from 2024 onwards)
-    filtered_papers.sort(key=lambda x: x.get("sort_date", "9999-99"))
-    
-    print(f"Scraping finished at {datetime.datetime.now()}, found {len(filtered_papers)} board papers from 2024 onwards")
-    
-    # STAGE 2: Analyze the PDFs for virtual ward mentions
-    print(f"Starting PDF analysis for virtual ward mentions...")
-    
-    pdf_papers = [p for p in filtered_papers if p["url"].lower().endswith('.pdf') or "pdf" in p["url"].lower()]
-    print(f"Found {len(pdf_papers)} PDF papers to analyze")
-    
-    # Initialize the analyzer
-    analyzer = PDFAnalyzer(GEMINI_API_KEY)
-    
-    # Analyze each PDF paper
-    for i, paper in enumerate(pdf_papers, 1):
-        try:
-            print(f"Analyzing PDF {i} of {len(pdf_papers)}: {paper['title']}")
-            
-            # Analyze the PDF
-            results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
-            
-            # Find the paper in filtered_papers and update it
-            for p in filtered_papers:
-                if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                    p["virtual_ward_mentioned"] = results["virtual_ward_mentioned"]
-                    p["virtual_ward_summary"] = results["summary"]
-                    p["virtual_ward_mentions_count"] = results["mentions_count"]
-                    print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
-                    break
-                    
-        except Exception as e:
-            print(f"Error analyzing PDF {paper['url']}: {str(e)}")
-            # Find the paper in filtered_papers and update it with the error
-            for p in filtered_papers:
-                if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                    p["virtual_ward_summary"] = f"Error during analysis: {str(e)}"
-                    break
-    
-    print(f"PDF analysis completed at {datetime.datetime.now()}")
-    
-    # Update latest results
-    latest_results = {
-        "last_run": datetime.datetime.now().isoformat(),
-        "board_papers": filtered_papers
-    }
-    
-    # Save results
-    save_results(latest_results)
-    print(f"Crawler and analysis completed at {datetime.datetime.now()}")
+    print(f"\nCrawler and analysis completed at {datetime.datetime.now()}")
+    print(f"Total papers found: {len(all_papers)}")
 
 async def run_crawler_for_specific_urls(urls, scrape_only=False):
-    """Run the NHS website crawler for specific URLs"""
-    # Load existing data
+    """Run the website crawler for specific URLs"""
     existing_data = load_existing_data()
     existing_papers = {(paper["url"], paper["title"]) for paper in existing_data.get("board_papers", [])}
     
-    # Log the URLs we're about to process
-    print(f"Processing {len(urls)} URLs:")
+    all_papers = []
     for url in urls:
-        print(f"  - {url}")
+        org_papers = await process_organization(url, existing_papers, scrape_only)
+        all_papers.extend(org_papers)
+        update_and_save_results(all_papers)
+        print(f"Saved results after processing {url}")
     
-    # Run the crawler for specific URLs
-    print(f"Starting crawler for specific URLs at {datetime.datetime.now()}")
-    papers = await crawler.find_board_papers_for_urls(urls)
-    
-    # Filter for board papers from 2024 onwards
-    filtered_papers = []
-    for paper in papers:
-        # Check if it's a board paper by title or URL
-        is_board_paper = any(term in paper.get("title", "").lower() or term in paper.get("url", "").lower() 
-                            for term in ["board", "meeting", "minutes", "papers", "agenda"])
-        
-        # Check if it's from 2024 or newer
-        has_valid_year = False
-        paper_date = paper.get("date", "")
-        paper_title = paper.get("title", "")
-        paper_url = paper.get("url", "")
-        
-        # Check for year in date, title or URL
-        if "2024" in paper_date or "2025" in paper_date:
-            has_valid_year = True
-        elif "2024" in paper_title or "2025" in paper_title:
-            has_valid_year = True
-        elif "2024" in paper_url or "2025" in paper_url:
-            has_valid_year = True
-            
-        if is_board_paper and has_valid_year:
-            # Extract month and year for sorting
-            month_names = ["january", "february", "march", "april", "may", "june", 
-                          "july", "august", "september", "october", "november", "december",
-                          "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-            
-            # Default sort value (end of list)
-            paper["sort_date"] = "9999-99"
-            
-            # Try to extract year and month
-            year = None
-            month = None
-            
-            # Look for year first
-            year_match = re.search(r'20(24|25)', paper_date + " " + paper_title + " " + paper_url)
-            if year_match:
-                year = "20" + year_match.group(1)
-                
-                # Then look for month
-                for i, month_name in enumerate(month_names):
-                    month_i = i % 12 + 1  # Convert to 1-12
-                    if month_name in (paper_date + " " + paper_title).lower():
-                        month = str(month_i).zfill(2)  # pad with zero
-                        break
-                
-                # If we found both year and month
-                if year and month:
-                    paper["sort_date"] = f"{year}-{month}"
-                elif year:
-                    paper["sort_date"] = f"{year}-00"
-            
-            # Initialize virtual ward fields
-            paper["virtual_ward_mentioned"] = False
-            paper["virtual_ward_summary"] = "Not analyzed (scrape-only mode)" if scrape_only else "Not analyzed"
-            paper["virtual_ward_mentions_count"] = 0
-            
-            filtered_papers.append(paper)
-    
-    # Mark new papers
-    for paper in filtered_papers:
-        paper["is_new"] = (paper["url"], paper["title"]) not in existing_papers
-        paper["found_date"] = datetime.datetime.now().isoformat()
-    
-    # Sort papers by date (most recent first but from 2024 onwards)
-    filtered_papers.sort(key=lambda x: x.get("sort_date", "9999-99"))
-    
-    print(f"Scraping finished at {datetime.datetime.now()}, found {len(filtered_papers)} board papers from 2024 onwards")
-    
-    # STAGE 2: Analyze the PDFs for virtual ward mentions (skip if scrape_only is True)
-    if not scrape_only:
-        print(f"Starting PDF analysis for virtual ward mentions...")
-        
-        pdf_papers = [p for p in filtered_papers if p["url"].lower().endswith('.pdf') or "pdf" in p["url"].lower()]
-        print(f"Found {len(pdf_papers)} PDF papers to analyze")
-        
-        # Initialize the analyzer
-        analyzer = PDFAnalyzer(GEMINI_API_KEY)
-        
-        # Analyze each PDF paper
-        for i, paper in enumerate(pdf_papers, 1):
-            try:
-                print(f"Analyzing PDF {i} of {len(pdf_papers)}: {paper['title']}")
-                
-                # Analyze the PDF
-                results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
-                
-                # Find the paper in filtered_papers and update it
-                for p in filtered_papers:
-                    if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                        p["virtual_ward_mentioned"] = results["virtual_ward_mentioned"]
-                        p["virtual_ward_summary"] = results["summary"]
-                        p["virtual_ward_mentions_count"] = results["mentions_count"]
-                        print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
-                        break
-                        
-            except Exception as e:
-                print(f"Error analyzing PDF {paper['url']}: {str(e)}")
-                # Find the paper in filtered_papers and update it with the error
-                for p in filtered_papers:
-                    if p["url"] == paper["url"] and p["title"] == paper["title"]:
-                        p["virtual_ward_summary"] = f"Error during analysis: {str(e)}"
-                        break
-        
-        print(f"PDF analysis completed at {datetime.datetime.now()}")
-    else:
-        print("Skipping PDF analysis (scrape-only mode)")
-    
-    return filtered_papers
+    print(f"\nCrawler and analysis completed at {datetime.datetime.now()}")
+    print(f"Total papers found: {len(all_papers)}")
+    return all_papers
 
 @app.route('/')
 def index():
@@ -381,26 +230,13 @@ def analyze_papers():
         urls = data.get('urls', [])
         
         if not urls:
-            return jsonify({
-                "error": "No URLs provided",
-                "success": False
-            }), 400
+            return jsonify({"error": "No URLs provided", "success": False}), 400
         
-        # Get the current board papers data
-        global latest_results
         current_papers = {paper["url"]: paper for paper in latest_results.get("board_papers", [])}
-        
-        # Initialize the analyzer
-        analyzer = PDFAnalyzer(GEMINI_API_KEY)
-        
-        # Prepare results array
         results = []
         
-        # Analyze each URL
         for url in urls:
-            # Check if we already have analysis for this URL
             if url in current_papers and current_papers[url].get("virtual_ward_summary") != "Not analyzed":
-                # Use existing analysis
                 paper = current_papers[url]
                 results.append({
                     "url": url,
@@ -412,10 +248,9 @@ def analyze_papers():
                 })
                 print(f"Using cached analysis for {url}")
             else:
-                # Perform new analysis
                 try:
                     print(f"Analyzing {url} for virtual ward mentions")
-                    analysis = analyzer.analyze_pdf_url(url)
+                    analysis = pdf_analyzer.analyze_pdf_url(url)
                     
                     result = {
                         "url": url,
@@ -425,21 +260,12 @@ def analyze_papers():
                         "mentions_count": analysis["mentions_count"],
                         "analysis_source": "new"
                     }
-                    
                     results.append(result)
                     
-                    # Update the paper in latest_results if it exists
                     if url in current_papers:
-                        for paper in latest_results["board_papers"]:
-                            if paper["url"] == url:
-                                paper["virtual_ward_mentioned"] = analysis["virtual_ward_mentioned"]
-                                paper["virtual_ward_summary"] = analysis["summary"]
-                                paper["virtual_ward_mentions_count"] = analysis["mentions_count"]
-                                break
-                                
-                    # Save the updated results
-                    save_results(latest_results)
-                    
+                        update_paper_analysis(url, analysis)
+                        save_results(latest_results)
+                        
                 except Exception as e:
                     results.append({
                         "url": url,
@@ -450,16 +276,19 @@ def analyze_papers():
                         "analysis_source": "error"
                     })
         
-        return jsonify({
-            "results": results,
-            "success": True
-        })
+        return jsonify({"results": results, "success": True})
         
     except Exception as e:
-        return jsonify({
-            "error": str(e),
-            "success": False
-        }), 500
+        return jsonify({"error": str(e), "success": False}), 500
+
+def update_paper_analysis(url, analysis):
+    """Update paper analysis in latest_results"""
+    for paper in latest_results["board_papers"]:
+        if paper["url"] == url:
+            paper["virtual_ward_mentioned"] = analysis["virtual_ward_mentioned"]
+            paper["virtual_ward_summary"] = analysis["summary"]
+            paper["virtual_ward_mentions_count"] = analysis["mentions_count"]
+            break
 
 @app.route('/test-analysis')
 def test_analysis():
@@ -490,6 +319,30 @@ def test_analysis():
             "error": str(e),
             "success": False
         }), 500
+    
+
+@app.route('/reset-existing-papers', methods=['POST'])
+def reset_existing_papers():
+    """
+    Danger: This route clears the stored board_papers.json file and resets it
+    so that existing_papers = {} for future crawler runs.
+    """
+    empty_results = {
+        "last_run": None,
+        "board_papers": []
+    }
+    save_results(empty_results)  # Same save_results() used elsewhere
+    
+    global latest_results
+    latest_results = empty_results
+    
+    return jsonify({
+        "status": "success",
+        "message": "Existing papers have been reset",
+        "results": latest_results
+    })
+
+
 
 if __name__ == '__main__':
     # Load existing data

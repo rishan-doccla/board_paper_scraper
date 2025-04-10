@@ -49,6 +49,7 @@
                         
                         <div class="d-flex align-items-center mb-3">
                             <button id="runCrawlerBtn" class="btn btn-primary me-3">Run Crawler Now</button>
+                            <button id="resetPapersBtn" class="btn btn-danger me-3">Reset Papers</button>
                             <div id="crawlerStatus" class="d-none">
                                 <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
                                 <span>Crawling websites... This may take a while.</span>
@@ -121,7 +122,7 @@
                                             {% for paper in results.board_papers %}
                                                 <tr class="paper-row {% if paper.is_new %}table-success new-paper{% endif %}">
                                                     <td>{{ paper.title }}</td>
-                                                    <td>{{ paper.organization }}</td>
+                                                    <td>{{ paper.trust }}</td>
                                                     <td>{{ paper.org_type }}</td>
                                                     <td>{{ paper.date }}</td>
                                                     <td>
@@ -363,6 +364,23 @@
 
         // Load results when page loads
         loadResults();
+
+        // Add Reset Papers button handler
+        document.getElementById('resetPapersBtn').addEventListener('click', async () => {
+            if (!confirm('Warning: This will erase all existing papers. Are you sure you want to proceed?')) {
+                return;
+            }
+            try {
+                const response = await fetch('/reset-existing-papers', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                alert(data.message || 'Reset completed');
+                location.reload(); // Reload page to reflect the empty results
+            } catch (error) {
+                alert('Error resetting papers: ' + error.message);
+            }
+        });
     </script>
 </body>
 </html> 
