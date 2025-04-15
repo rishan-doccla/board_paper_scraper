@@ -41,23 +41,41 @@ class PDFAnalyzer:
         text = text.replace('\xa0', ' ')
         # Normalize quotes
         text = text.replace('"', '"').replace('"', '"')
+        # Fix common OCR issues with medical terms
+        text = text.replace('heartfailure', 'heart failure')
+        text = text.replace('HeartFailure', 'Heart Failure')
+        text = text.replace('HEARTFAILURE', 'HEART FAILURE')
+        text = text.replace('virtualward', 'virtual ward')
+        text = text.replace('VirtualWard', 'Virtual Ward')
         return text
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text content from a PDF file."""
+        """Extract text content from a PDF file with improved handling of formatting."""
         logger.info(f"Extracting text from PDF: {pdf_path}")
         try:
             reader = PdfReader(pdf_path)
             text = ""
             for page in reader.pages:
-                text += self.clean_text(page.extract_text()) + " "
+                page_text = page.extract_text()
+                if page_text:
+                    # Clean the text
+                    page_text = self.clean_text(page_text)
+                    text += page_text + " "
+                else:
+                    # If extract_text() returns empty (possibly due to images/tables)
+                    logger.warning(f"Empty text extracted from page in {pdf_path}")
+                    
+            if not text.strip():
+                logger.warning(f"No text could be extracted from {pdf_path}")
+                return "No text could be extracted from this PDF."
+                
             logger.info(f"Successfully extracted {len(reader.pages)} pages")
             return text.strip()
         except Exception as e:
             logger.error(f"Error extracting text from PDF: {str(e)}")
             raise
     
-    def chunk_text(self, text: str, chunk_size: int = 10000) -> List[str]:
+    def chunk_text(self, text: str, chunk_size: int = 15000) -> List[str]:
         """Split text into chunks to avoid token limits."""
         words = text.split()
         chunks = []
@@ -76,39 +94,81 @@ class PDFAnalyzer:
         if current_chunk:
             chunks.append(' '.join(current_chunk))
         
+        # Ensure we have at least one chunk
+        if not chunks and text:
+            chunks = [text[:min(chunk_size, len(text))]]
+        
         logger.info(f"Split text into {len(chunks)} chunks")
         return chunks
     
     def analyze_text_chunk(self, text: str) -> List[Dict]:
-        """Analyze a chunk of text for virtual ward mentions."""
+        """Analyze a chunk of text for multiple healthcare terms."""
         logger.info("Analyzing text chunk with Gemini API")
-        prompt = """Analyze this text for mentions of 'virtual ward' or related concepts.
-    
-    For each mention found, respond in this EXACT format (including the triple backticks):
-    ```mention
-    EXACT QUOTE CONTAINING VIRTUAL WARD
-    ```
-    ```summary
-    BRIEF SUMMARY OF WHAT IS BEING DISCUSSED
-    ```
-    ```context
-    SURROUNDING CONTEXT
-    ```
-    ---
-    
-    If no mentions are found, respond with just: NO_MENTIONS_FOUND
-    
-    Text to analyze:
-    {text}"""
+        prompt = """I want you to work as a board paper analyser for healthcare documents. Within the text provided, scan CAREFULLY for ANY mentions of the following healthcare terms, even if they appear only once or in tables.
+
+Please analyze for ALL mentions of the following terms (including variations, abbreviations, plurals, and related concepts):
+
+- COPD (Chronic Obstructive Pulmonary Disease, chronic lung disease, lung conditions)
+- Heart Failure (cardiac failure, CHF, HF, heart conditions, cardiac conditions, heart disease)
+- Long term conditions (LTCs, chronic conditions, ongoing health needs, long-term illness)
+- Proactive (preventative, early intervention, upstream work, proactively)
+- Prevention (preventative care, early intervention, risk reduction, preventing)
+- Neighbourhood (place-based care, community care, local care, locality)
+- Left shift (care moving from acute to community, hospital to home, shifting care)
+- Rising risk (patients at risk, high risk cohorts, risk stratification, at-risk patients) 
+- Virtual wards (virtual care, virtual hospital, remote monitoring, virtual ward)
+
+IMPORTANT: For each term where you find ANY mention in the text, respond using this format:
+
+```term
+TERM_NAME
+```
+```mentions
+EXACT QUOTE(S) FROM THE TEXT WHERE THE TERM APPEARS (include enough context)
+```
+```summary
+CLEAR SUMMARY OF WHAT IS BEING DISCUSSED, INCLUDING INITIATIVES OR CHALLENGES
+```
+---
+
+BE EXTREMELY THOROUGH. Include terms even if they are only mentioned briefly or in passing. Don't miss any terms. Read tables carefully. If you see 'HF' or 'CHF', that means Heart Failure. If you see 'COPD', that refers to Chronic Obstructive Pulmonary Disease.
+
+If you find NO specific mentions of any terms, respond with: NO_RELEVANT_MENTIONS_FOUND
+
+Text to analyze:
+{text}"""
         
         try:
+            # Use the original model
             model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(prompt.format(text=text))
+            
+            # Set generation config with longer timeout for complex documents
+            generation_config = {
+                "temperature": 0.2,  # Lower temperature for more focused extraction
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 8192,  # Allow longer responses
+            }
+            
+            # Make API call with timeout handling
+            safety_settings = [
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                }
+            ]
+            
+            response = model.generate_content(
+                prompt.format(text=text),
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
+            
             content = response.text.strip()
             
             # If no mentions found
-            if content == "NO_MENTIONS_FOUND":
-                logger.info("No virtual ward mentions found in chunk")
+            if content == "NO_RELEVANT_MENTIONS_FOUND":
+                logger.info("No relevant term mentions found in chunk")
                 return []
                 
             # Parse the response format
@@ -121,28 +181,28 @@ class PDFAnalyzer:
                     
                 mention = {}
                 
-                # Extract quote
-                start = section.find('```mention\n') + 10
-                end = section.find('```', start)
-                if start > 9 and end != -1:
-                    mention['mention'] = section[start:end].strip()
+                # Extract term
+                term_start = section.find('```term\n') + 8
+                term_end = section.find('```', term_start)
+                if term_start > 7 and term_end != -1:
+                    mention['term'] = section[term_start:term_end].strip()
+                
+                # Extract mentions/quotes
+                mentions_start = section.find('```mentions\n') + 12
+                mentions_end = section.find('```', mentions_start)
+                if mentions_start > 11 and mentions_end != -1:
+                    mention['quotes'] = section[mentions_start:mentions_end].strip()
                 
                 # Extract summary
-                start = section.find('```summary\n') + 10
-                end = section.find('```', start)
-                if start > 9 and end != -1:
-                    mention['summary'] = section[start:end].strip()
-                
-                # Extract context
-                start = section.find('```context\n') + 10
-                end = section.find('```', start)
-                if start > 9 and end != -1:
-                    mention['page_context'] = section[start:end].strip()
+                summary_start = section.find('```summary\n') + 11
+                summary_end = section.find('```', summary_start)
+                if summary_start > 10 and summary_end != -1:
+                    mention['summary'] = section[summary_start:summary_end].strip()
                 
                 if len(mention) == 3:  # Only add if we found all three parts
                     mentions.append(mention)
             
-            logger.info(f"Found {len(mentions)} virtual ward mentions in chunk")
+            logger.info(f"Found {len(mentions)} term mentions in chunk")
             return mentions
             
         except Exception as e:
@@ -284,35 +344,49 @@ class PDFAnalyzer:
             # Extract metadata
             metadata = self.extract_metadata(text)
             
-            # Create a summary if mentions were found
+            # Process found terms
             if mentions:
-                # Extract and join all summaries
-                summaries = [m["summary"] for m in mentions]
-                summary = " ".join(summaries)
+                # Group mentions by term
+                terms_found = set()
+                terms_data = {}
+                for mention in mentions:
+                    term = mention.get('term')
+                    if term:
+                        terms_found.add(term)
+                        if term not in terms_data:
+                            terms_data[term] = {
+                                'quotes': [mention.get('quotes', '')],
+                                'summaries': [mention.get('summary', '')]
+                            }
+                        else:
+                            terms_data[term]['quotes'].append(mention.get('quotes', ''))
+                            terms_data[term]['summaries'].append(mention.get('summary', ''))
                 
                 result = {
                     "success": True,
-                    "virtual_ward_mentioned": True,
-                    "mentions_count": len(mentions),
-                    "summary": summary,
+                    "terms_found": list(terms_found),
+                    "terms_count": len(terms_found),
+                    "has_relevant_terms": len(terms_found) > 0,
+                    "terms_data": terms_data,
                     "detailed_mentions": mentions,
                     "date": metadata['date'],
                     "title": metadata['title'],
                     "organization": metadata['organization']
                 }
-                logger.info(f"Found {len(mentions)} virtual ward mentions")
+                logger.info(f"Found {len(terms_found)} relevant terms")
             else:
                 result = {
                     "success": True,
-                    "virtual_ward_mentioned": False,
-                    "mentions_count": 0,
-                    "summary": "No mentions of virtual wards found in this document.",
+                    "terms_found": [],
+                    "terms_count": 0,
+                    "has_relevant_terms": False,
+                    "terms_data": {},
                     "detailed_mentions": [],
                     "date": metadata['date'],
                     "title": metadata['title'],
                     "organization": metadata['organization']
                 }
-                logger.info("No virtual ward mentions found")
+                logger.info("No relevant terms found")
                 
             return result
             
@@ -320,13 +394,14 @@ class PDFAnalyzer:
             logger.error(f"Error analyzing PDF: {str(e)}")
             return {
                 "success": False,
-                "virtual_ward_mentioned": False,
-                "mentions_count": 0,
-                "summary": f"Error analyzing PDF: {str(e)}",
+                "terms_found": [],
+                "terms_count": 0,
+                "has_relevant_terms": False,
+                "terms_data": {},
                 "detailed_mentions": [],
-                "date": metadata['date'],
-                "title": metadata['title'],
-                "organization": metadata['organization']
+                "date": "Unknown",
+                "title": "Unknown",
+                "organization": "Unknown"
             }
     
     def analyze_pdf_directory(self, directory_path: str, verbose: bool = True) -> Dict[str, List[Dict]]:
@@ -371,13 +446,14 @@ class PDFAnalyzer:
                 results.append({
                     "url": url,
                     "success": False,
-                    "virtual_ward_mentioned": False,
-                    "mentions_count": 0,
-                    "summary": f"Error analyzing PDF: {str(e)}",
+                    "terms_found": [],
+                    "terms_count": 0,
+                    "has_relevant_terms": False,
+                    "terms_data": {},
                     "detailed_mentions": [],
-                    "date": metadata['date'],
-                    "title": metadata['title'],
-                    "organization": metadata['organization']
+                    "date": "Unknown",
+                    "title": "Unknown",
+                    "organization": "Unknown"
                 })
         
         return results
@@ -491,7 +567,7 @@ if __name__ == "__main__":
         
         for i, mention in enumerate(mentions, 1):
             logger.info(f"\nMention {i}:")
-            logger.info(f"Quote: {mention['mention']}")
+            logger.info(f"Quote: {mention['quotes']}")
             logger.info(f"Summary: {mention['summary']}")
-            logger.info(f"Context: {mention['page_context']}")
+            logger.info(f"Term: {mention['term']}")
             logger.info("-" * 30) 

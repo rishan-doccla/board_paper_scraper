@@ -57,17 +57,18 @@ def save_results(results):
         json.dump(results, f, indent=2)
 
 def process_paper_analysis(paper, analyzer, scrape_only=False):
-    """Analyze a single paper for virtual ward mentions"""
+    """Analyze a single paper for healthcare terms"""
     if scrape_only:
         return {
-            "virtual_ward_mentioned": False,
-            "summary": "Not analyzed (scrape-only mode)",
-            "virtual_ward_mentions_count": 0
+            "has_relevant_terms": False,
+            "terms_found": [],
+            "terms_count": 0,
+            "terms_data": {}
         }
     
     try:
         results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
-        print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
+        print(f"  - Found terms: {', '.join(results.get('terms_found', []))}")
         
         # Update paper with metadata if available
         if results.get('title') and results['title'] != 'Unknown':
@@ -77,18 +78,36 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
         if results.get('organization') and results['organization'] != 'Unknown':
             paper['organization'] = results['organization']
         
+        # Ensure terms_data is properly formatted - create a clean copy
+        clean_terms_data = {}
+        for term, data in results.get("terms_data", {}).items():
+            quotes = data.get("quotes", [])
+            if isinstance(quotes, str):
+                quotes = [quotes]
+                
+            summaries = data.get("summaries", [])
+            if isinstance(summaries, str):
+                summaries = [summaries]
+                
+            clean_terms_data[term] = {
+                "quotes": quotes,
+                "summaries": summaries
+            }
+        
         return {
-            "virtual_ward_mentioned": results["virtual_ward_mentioned"],
-            "summary": results["summary"],
-            "virtual_ward_mentions_count": results["mentions_count"]
+            "has_relevant_terms": results["has_relevant_terms"],
+            "terms_found": results["terms_found"],
+            "terms_count": results["terms_count"],
+            "terms_data": clean_terms_data
         }
     except Exception as e:
         error_msg = f"Error analyzing PDF {paper['url']}: {str(e)}"
         print(error_msg)
         return {
-            "virtual_ward_mentioned": False,
-            "summary": f"Error during analysis: {str(e)}",
-            "virtual_ward_mentions_count": 0
+            "has_relevant_terms": False,
+            "terms_found": [],
+            "terms_count": 0,
+            "terms_data": {}
         }
 
 def create_paper_dict(paper, org_url, existing_papers):
@@ -107,8 +126,10 @@ def create_paper_dict(paper, org_url, existing_papers):
         "date": paper.get("date", "Unknown"),
         "trust": paper.get("trust", org_url),
         "organization": paper.get("organization", "Unknown"),
-        "virtual_ward_mentioned": False,
-        "summary": "Not analyzed",
+        "has_relevant_terms": False,
+        "terms_found": [],
+        "terms_count": 0,
+        "terms_data": {},
         "is_new": (paper["url"], paper.get("title", "Unknown")) not in existing_papers,
         "found_date": datetime.datetime.now().isoformat(),
         "sort_date": paper.get("date", "9999-99") if paper.get("date") != "Unknown" else "9999-99"
@@ -143,9 +164,10 @@ async def process_organization(url, existing_papers, scrape_only=False):
                 print(f"Paper from 2024 or later ({date}), performing full analysis")
                 analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
                 paper_dict.update({
-                    "virtual_ward_mentioned": analysis_results["virtual_ward_mentioned"],
-                    "summary": analysis_results["summary"],
-                    "virtual_ward_mentions_count": analysis_results["virtual_ward_mentions_count"]
+                    "has_relevant_terms": analysis_results["has_relevant_terms"],
+                    "terms_found": analysis_results["terms_found"],
+                    "terms_count": analysis_results["terms_count"],
+                    "terms_data": analysis_results["terms_data"]
                 })
                 org_papers.append(paper_dict)
             else:
@@ -284,7 +306,7 @@ def analyze_papers():
         results = []
         
         for url in urls:
-            if url in current_papers and current_papers[url].get("summary") != "Not analyzed":
+            if url in current_papers and current_papers[url].get("terms_count", 0) > 0:
                 paper = current_papers[url]
                 
                 # Skip if paper is before 2024
@@ -295,9 +317,10 @@ def analyze_papers():
                 results.append({
                     "url": url,
                     "title": paper.get("title", "Unknown"),
-                    "virtual_ward_mentioned": paper.get("virtual_ward_mentioned", False),
-                    "summary": paper.get("summary", "No analysis available"),
-                    "mentions_count": paper.get("virtual_ward_mentions_count", 0),
+                    "has_relevant_terms": paper.get("has_relevant_terms", False),
+                    "terms_found": paper.get("terms_found", []),
+                    "terms_count": paper.get("terms_count", 0),
+                    "terms_data": paper.get("terms_data", {}),
                     "date": paper.get("date", "Unknown"),
                     "organization": paper.get("organization", "Unknown"),
                     "analysis_source": "cached"
@@ -315,15 +338,16 @@ def analyze_papers():
                     
                     # Only if it's from 2024 or later, proceed with full analysis
                     print(f"Paper from 2024 or later ({date}), performing full analysis")
-                    print(f"Analyzing {url} for virtual ward mentions")
+                    print(f"Analyzing {url} for healthcare terms")
                     analysis = pdf_analyzer.analyze_pdf_url(url)
                     
                     result = {
                         "url": url,
                         "title": analysis.get("title", current_papers.get(url, {}).get("title", "Unknown")),
-                        "virtual_ward_mentioned": analysis["virtual_ward_mentioned"],
-                        "summary": analysis["summary"],
-                        "mentions_count": analysis["mentions_count"],
+                        "has_relevant_terms": analysis["has_relevant_terms"],
+                        "terms_found": analysis["terms_found"],
+                        "terms_count": analysis["terms_count"],
+                        "terms_data": analysis["terms_data"],
                         "date": analysis.get("date", "Unknown"),
                         "organization": analysis.get("organization", "Unknown"),
                         "analysis_source": "new"
@@ -338,9 +362,10 @@ def analyze_papers():
                     results.append({
                         "url": url,
                         "title": current_papers.get(url, {}).get("title", "Unknown"),
-                        "virtual_ward_mentioned": False,
-                        "summary": f"Error during analysis: {str(e)}",
-                        "mentions_count": 0,
+                        "has_relevant_terms": False,
+                        "terms_found": [],
+                        "terms_count": 0,
+                        "terms_data": {},
                         "date": "Unknown",
                         "organization": current_papers.get(url, {}).get("organization", "Unknown"),
                         "analysis_source": "error"
@@ -355,9 +380,28 @@ def update_paper_analysis(url, analysis):
     """Update paper analysis in latest_results"""
     for paper in latest_results["board_papers"]:
         if paper["url"] == url:
-            paper["virtual_ward_mentioned"] = analysis["virtual_ward_mentioned"]
-            paper["summary"] = analysis["summary"]
-            paper["virtual_ward_mentions_count"] = analysis["mentions_count"]
+            # Basic fields
+            paper["has_relevant_terms"] = analysis["has_relevant_terms"]
+            paper["terms_found"] = analysis["terms_found"]
+            paper["terms_count"] = analysis["terms_count"]
+            
+            # Handle terms_data with proper formatting
+            clean_terms_data = {}
+            for term, data in analysis.get("terms_data", {}).items():
+                quotes = data.get("quotes", [])
+                if isinstance(quotes, str):
+                    quotes = [quotes]
+                    
+                summaries = data.get("summaries", [])
+                if isinstance(summaries, str):
+                    summaries = [summaries]
+                    
+                clean_terms_data[term] = {
+                    "quotes": quotes,
+                    "summaries": summaries
+                }
+            
+            paper["terms_data"] = clean_terms_data
             
             # Update paper metadata if available
             if analysis.get("date") and analysis["date"] != "Unknown":
@@ -424,7 +468,22 @@ def reset_existing_papers():
         "results": latest_results
     })
 
-
+@app.route('/debug-paper/<int:index>', methods=['GET'])
+def debug_paper(index):
+    """Debug route to view paper data structure"""
+    if not latest_results or not latest_results.get("board_papers"):
+        return jsonify({"error": "No papers found"}), 404
+        
+    if index >= len(latest_results["board_papers"]):
+        return jsonify({"error": f"Paper index {index} out of range. Only {len(latest_results['board_papers'])} papers available."}), 404
+        
+    paper = latest_results["board_papers"][index]
+    return jsonify({
+        "paper": paper,
+        "paper_json": json.dumps(paper),
+        "terms_data_type": str(type(paper.get("terms_data"))),
+        "terms_data_json": json.dumps(paper.get("terms_data", {}))
+    })
 
 if __name__ == '__main__':
     # Load existing data

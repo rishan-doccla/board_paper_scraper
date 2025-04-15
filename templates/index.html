@@ -111,7 +111,7 @@
                                             <th>Title</th>
                                             <th>Organization</th>
                                             <th>Date</th>
-                                            <th>Virtual Ward</th>
+                                            <th>Terms</th>
                                             <th>Summary</th>
                                             <th>Action</th>
                                         </tr>
@@ -124,23 +124,30 @@
                                                     <td>{{ paper.organization if paper.organization != "Unknown" else paper.trust }}</td>
                                                     <td>{{ paper.date if paper.date != "Unknown" else "" }}</td>
                                                     <td>
-                                                        {% if paper.virtual_ward_mentioned %}
-                                                            <span class="badge bg-success">Yes</span>
+                                                        {% if paper.has_relevant_terms and paper.terms_found %}
+                                                            <span class="badge bg-success">{{ paper.terms_count }}</span>
+                                                            {% for term in paper.terms_found[:2] %}
+                                                                <span class="badge bg-info">{{ term }}</span>
+                                                            {% endfor %}
+                                                            {% if paper.terms_found|length > 2 %}
+                                                                <span class="badge bg-secondary">+{{ paper.terms_found|length - 2 }}</span>
+                                                            {% endif %}
                                                         {% else %}
-                                                            <span class="badge bg-secondary">No</span>
+                                                            <span class="badge bg-secondary">None</span>
                                                         {% endif %}
                                                     </td>
                                                     <td>
-                                                        {% if paper.virtual_ward_mentioned %}
+                                                        {% if paper.has_relevant_terms and paper.terms_found %}
                                                             <button type="button" class="btn btn-sm btn-info" 
                                                                     data-bs-toggle="modal" 
                                                                     data-bs-target="#summaryModal"
-                                                                    data-summary="{{ paper.summary }}"
+                                                                    data-terms='{{ paper.terms_found|tojson }}'
+                                                                    data-terms-data='{{ paper.terms_data|tojson|safe }}'
                                                                     data-title="{{ paper.title if paper.title != 'Unknown' else paper.filename }}">
-                                                                View Summary
+                                                                View Terms
                                                             </button>
                                                         {% else %}
-                                                            {{ paper.summary }}
+                                                            No relevant terms found
                                                         {% endif %}
                                                     </td>
                                                     <td>
@@ -198,17 +205,19 @@
         </div>
     </div>
 
-    <!-- Virtual Ward Summary Modal -->
+    <!-- Terms Summary Modal -->
     <div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog modal-xl">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="summaryModalLabel">Virtual Ward Summary</h5>
+                    <h5 class="modal-title" id="summaryModalLabel">Healthcare Terms Found</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <h6 id="modalPaperTitle"></h6>
-                    <div id="modalSummaryContent" class="mt-3"></div>
+                    <h6 id="modalPaperTitle" class="mb-3"></h6>
+                    <div id="modalTermsContent" class="mt-2">
+                        <!-- Terms content will be inserted here dynamically -->
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -232,14 +241,93 @@
             if (summaryModal) {
                 summaryModal.addEventListener('show.bs.modal', function (event) {
                     const button = event.relatedTarget;
-                    const summary = button.getAttribute('data-summary');
+                    const termsJson = button.getAttribute('data-terms');
+                    const termsDataJson = button.getAttribute('data-terms-data');
                     const title = button.getAttribute('data-title');
                     
                     const modalTitle = this.querySelector('#modalPaperTitle');
-                    const modalContent = this.querySelector('#modalSummaryContent');
+                    const modalContent = this.querySelector('#modalTermsContent');
                     
                     modalTitle.textContent = title;
-                    modalContent.textContent = summary;
+                    
+                    try {
+                        // Parse the JSON data
+                        console.log("Raw Terms JSON:", termsJson);
+                        console.log("Raw Terms Data JSON:", termsDataJson);
+                        
+                        const terms = JSON.parse(termsJson || '[]');
+                        const termsData = JSON.parse(termsDataJson || '{}');
+
+                        console.log("Parsed Terms:", terms);
+                        console.log("Parsed Terms data:", termsData);
+                        
+                        // Clear previous content
+                        modalContent.innerHTML = '';
+                        
+                        if (!terms || terms.length === 0) {
+                            modalContent.innerHTML = '<div class="alert alert-info">No terms found in this document.</div>';
+                            return;
+                        }
+                        
+                        // Create accordion for terms
+                        const accordionDiv = document.createElement('div');
+                        accordionDiv.className = 'accordion';
+                        accordionDiv.id = 'termsAccordion';
+                        
+                        // Add each term as an accordion item
+                        terms.forEach((term, index) => {
+                            if (!term) return;
+                            
+                            const termData = termsData[term];
+                            if (!termData) {
+                                console.warn(`No data found for term: ${term}`);
+                                modalContent.innerHTML += `<div class="alert alert-warning mb-3">Term "${term}" found but no details available.</div>`;
+                                return;
+                            }
+                            
+                            const termSummaries = termData.summaries ? termData.summaries.join(' ') : 'No summary available';
+                            const termQuotes = termData.quotes ? termData.quotes.join('\n\n') : 'No quotes available';
+                            
+                            const accordionItem = document.createElement('div');
+                            accordionItem.className = 'accordion-item mb-3 border';
+                            accordionItem.innerHTML = `
+                                <h2 class="accordion-header" id="heading${index}">
+                                    <button class="accordion-button ${index === 0 ? '' : 'collapsed'}" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#collapse${index}" aria-expanded="${index === 0 ? 'true' : 'false'}" aria-controls="collapse${index}">
+                                        ${term}
+                                    </button>
+                                </h2>
+                                <div id="collapse${index}" class="accordion-collapse collapse ${index === 0 ? 'show' : ''}" 
+                                     aria-labelledby="heading${index}" data-bs-parent="#termsAccordion">
+                                    <div class="accordion-body bg-light">
+                                        <h6 class="text-primary">Summary:</h6>
+                                        <p>${termSummaries}</p>
+                                        <h6 class="text-primary mt-3">Mentions:</h6>
+                                        <pre class="border p-3 bg-white small rounded" style="white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">${termQuotes}</pre>
+                                    </div>
+                                </div>
+                            `;
+                            
+                            accordionDiv.appendChild(accordionItem);
+                        });
+                        
+                        if (accordionDiv.children.length > 0) {
+                            modalContent.appendChild(accordionDiv);
+                        } else {
+                            modalContent.innerHTML = '<div class="alert alert-info">Could not display term details.</div>';
+                        }
+                    } catch (error) {
+                        console.error("Error displaying terms:", error);
+                        modalContent.innerHTML = `
+                            <div class="alert alert-danger">Error displaying terms: ${error.message}</div>
+                            <div class="alert alert-info">
+                                <strong>Raw terms data:</strong><br>
+                                <pre>${termsJson}</pre>
+                                <strong>Raw terms_data data:</strong><br>
+                                <pre>${termsDataJson}</pre>
+                            </div>
+                        `;
+                    }
                 });
             }
         });
