@@ -39,7 +39,16 @@ def load_existing_data():
     """Load existing board paper data if available"""
     if os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            
+            # Filter papers to only include those from 2024 or later
+            if "board_papers" in data:
+                data["board_papers"] = [
+                    paper for paper in data["board_papers"] 
+                    if is_from_2024_or_later(paper.get("date", "Unknown"))
+                ]
+                print(f"Loaded {len(data['board_papers'])} papers from 2024 or later")
+            return data
     return {"last_run": None, "board_papers": []}
 
 def save_results(results):
@@ -114,6 +123,34 @@ def update_and_save_results(papers):
     }
     save_results(latest_results)
 
+def is_from_2024_or_later(date_str):
+    """Check if a paper's date is from 2024 or later"""
+    if date_str == "Unknown" or not date_str:
+        return False
+    
+    # Try to extract year from various date formats
+    try:
+        # Handle ISO format (YYYY-MM-DD)
+        if '-' in date_str and len(date_str) >= 4:
+            year = int(date_str.split('-')[0])
+            return year >= 2024
+        
+        # Handle other formats that have year at the beginning
+        elif len(date_str) >= 4 and date_str[:4].isdigit():
+            year = int(date_str[:4])
+            return year >= 2024
+            
+        # Handle formats with year at the end (e.g., "Jan 2024" or "January 2024")
+        elif " " in date_str and date_str.split()[-1].isdigit():
+            year = int(date_str.split()[-1])
+            return year >= 2024
+            
+        # Default to keeping the paper if we can't determine the date
+        else:
+            return False
+    except:
+        return False
+
 async def process_organization(url, existing_papers, scrape_only=False):
     """Process a single organization's papers"""
     print(f"\nProcessing organization: {url}")
@@ -122,6 +159,8 @@ async def process_organization(url, existing_papers, scrape_only=False):
     
     for paper in papers:
         paper_dict = create_paper_dict(paper, url, existing_papers)
+        
+        # Get metadata for date filtering
         if not scrape_only:
             analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
             paper_dict.update({
@@ -129,9 +168,14 @@ async def process_organization(url, existing_papers, scrape_only=False):
                 "summary": analysis_results["summary"],
                 "virtual_ward_mentions_count": analysis_results["virtual_ward_mentions_count"]
             })
-        org_papers.append(paper_dict)
+            
+        # Only include papers from 2024 onwards
+        if is_from_2024_or_later(paper_dict.get("date", "Unknown")):
+            org_papers.append(paper_dict)
+        else:
+            print(f"Skipping paper with date {paper_dict.get('date', 'Unknown')}: {paper_dict.get('title', 'Unknown')}")
     
-    print(f"Found {len(org_papers)} papers for {url}")
+    print(f"Found {len(org_papers)} papers from 2024 onwards for {url}")
     return org_papers
 
 def run_crawler():
@@ -253,14 +297,22 @@ def analyze_papers():
         results = []
         
         for url in urls:
-            if url in current_papers and current_papers[url].get("virtual_ward_summary") != "Not analyzed":
+            if url in current_papers and current_papers[url].get("summary") != "Not analyzed":
                 paper = current_papers[url]
+                
+                # Skip if paper is before 2024
+                if not is_from_2024_or_later(paper.get("date", "Unknown")):
+                    print(f"Skipping pre-2024 paper: {paper.get('title', 'Unknown')}")
+                    continue
+                    
                 results.append({
                     "url": url,
                     "title": paper.get("title", "Unknown"),
                     "virtual_ward_mentioned": paper.get("virtual_ward_mentioned", False),
-                    "summary": paper.get("virtual_ward_summary", "No analysis available"),
+                    "summary": paper.get("summary", "No analysis available"),
                     "mentions_count": paper.get("virtual_ward_mentions_count", 0),
+                    "date": paper.get("date", "Unknown"),
+                    "organization": paper.get("organization", "Unknown"),
                     "analysis_source": "cached"
                 })
                 print(f"Using cached analysis for {url}")
@@ -269,12 +321,19 @@ def analyze_papers():
                     print(f"Analyzing {url} for virtual ward mentions")
                     analysis = pdf_analyzer.analyze_pdf_url(url)
                     
+                    # Skip if paper is before 2024
+                    if not is_from_2024_or_later(analysis.get("date", "Unknown")):
+                        print(f"Skipping pre-2024 paper: {analysis.get('title', 'Unknown')}")
+                        continue
+                    
                     result = {
                         "url": url,
-                        "title": current_papers.get(url, {}).get("title", "Unknown"),
+                        "title": analysis.get("title", current_papers.get(url, {}).get("title", "Unknown")),
                         "virtual_ward_mentioned": analysis["virtual_ward_mentioned"],
                         "summary": analysis["summary"],
                         "mentions_count": analysis["mentions_count"],
+                        "date": analysis.get("date", "Unknown"),
+                        "organization": analysis.get("organization", "Unknown"),
                         "analysis_source": "new"
                     }
                     results.append(result)
@@ -290,6 +349,8 @@ def analyze_papers():
                         "virtual_ward_mentioned": False,
                         "summary": f"Error during analysis: {str(e)}",
                         "mentions_count": 0,
+                        "date": "Unknown",
+                        "organization": current_papers.get(url, {}).get("organization", "Unknown"),
                         "analysis_source": "error"
                     })
         
@@ -303,8 +364,20 @@ def update_paper_analysis(url, analysis):
     for paper in latest_results["board_papers"]:
         if paper["url"] == url:
             paper["virtual_ward_mentioned"] = analysis["virtual_ward_mentioned"]
-            paper["virtual_ward_summary"] = analysis["summary"]
+            paper["summary"] = analysis["summary"]
             paper["virtual_ward_mentions_count"] = analysis["mentions_count"]
+            
+            # Update paper metadata if available
+            if analysis.get("date") and analysis["date"] != "Unknown":
+                paper["date"] = analysis["date"]
+                # Update sort_date based on new date
+                paper["sort_date"] = analysis["date"] if is_from_2024_or_later(analysis["date"]) else "9999-99"
+                
+            if analysis.get("title") and analysis["title"] != "Unknown":
+                paper["title"] = analysis["title"]
+                
+            if analysis.get("organization") and analysis["organization"] != "Unknown":
+                paper["organization"] = analysis["organization"]
             break
 
 @app.route('/test-analysis')
