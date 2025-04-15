@@ -45,7 +45,7 @@ def load_existing_data():
             if "board_papers" in data:
                 data["board_papers"] = [
                     paper for paper in data["board_papers"] 
-                    if is_from_2024_or_later(paper.get("date", "Unknown"))
+                    if pdf_analyzer.is_from_2024_or_later(paper.get("date", "Unknown"))
                 ]
                 print(f"Loaded {len(data['board_papers'])} papers from 2024 or later")
             return data
@@ -123,34 +123,6 @@ def update_and_save_results(papers):
     }
     save_results(latest_results)
 
-def is_from_2024_or_later(date_str):
-    """Check if a paper's date is from 2024 or later"""
-    if date_str == "Unknown" or not date_str:
-        return False
-    
-    # Try to extract year from various date formats
-    try:
-        # Handle ISO format (YYYY-MM-DD)
-        if '-' in date_str and len(date_str) >= 4:
-            year = int(date_str.split('-')[0])
-            return year >= 2024
-        
-        # Handle other formats that have year at the beginning
-        elif len(date_str) >= 4 and date_str[:4].isdigit():
-            year = int(date_str[:4])
-            return year >= 2024
-            
-        # Handle formats with year at the end (e.g., "Jan 2024" or "January 2024")
-        elif " " in date_str and date_str.split()[-1].isdigit():
-            year = int(date_str.split()[-1])
-            return year >= 2024
-            
-        # Default to keeping the paper if we can't determine the date
-        else:
-            return False
-    except:
-        return False
-
 async def process_organization(url, existing_papers, scrape_only=False):
     """Process a single organization's papers"""
     print(f"\nProcessing organization: {url}")
@@ -160,20 +132,35 @@ async def process_organization(url, existing_papers, scrape_only=False):
     for paper in papers:
         paper_dict = create_paper_dict(paper, url, existing_papers)
         
-        # Get metadata for date filtering
         if not scrape_only:
-            analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
-            paper_dict.update({
-                "virtual_ward_mentioned": analysis_results["virtual_ward_mentioned"],
-                "summary": analysis_results["summary"],
-                "virtual_ward_mentions_count": analysis_results["virtual_ward_mentions_count"]
-            })
+            # First, just extract the date to check if it's from 2024 or later
+            print(f"Checking date for: {paper_dict['url']}")
+            date = pdf_analyzer.extract_date_only(paper_dict['url'])
+            paper_dict['date'] = date
             
-        # Only include papers from 2024 onwards
-        if is_from_2024_or_later(paper_dict.get("date", "Unknown")):
+            # Only proceed with full analysis if the paper is from 2024 or later
+            if pdf_analyzer.is_from_2024_or_later(date):
+                print(f"Paper from 2024 or later ({date}), performing full analysis")
+                analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
+                paper_dict.update({
+                    "virtual_ward_mentioned": analysis_results["virtual_ward_mentioned"],
+                    "summary": analysis_results["summary"],
+                    "virtual_ward_mentions_count": analysis_results["virtual_ward_mentions_count"]
+                })
+                org_papers.append(paper_dict)
+            else:
+                print(f"Skipping full analysis for pre-2024 paper: {date}")
+        elif paper_dict.get("date") != "Unknown" and pdf_analyzer.is_from_2024_or_later(paper_dict.get("date")):
+            # In scrape-only mode, add the paper only if the date is 2024 or later
             org_papers.append(paper_dict)
-        else:
-            print(f"Skipping paper with date {paper_dict.get('date', 'Unknown')}: {paper_dict.get('title', 'Unknown')}")
+        elif scrape_only:
+            # In scrape-only mode, check date if not already present
+            date = pdf_analyzer.extract_date_only(paper_dict['url'])
+            paper_dict['date'] = date
+            if pdf_analyzer.is_from_2024_or_later(date):
+                org_papers.append(paper_dict)
+            else:
+                print(f"Skipping pre-2024 paper in scrape-only mode: {date}")
     
     print(f"Found {len(org_papers)} papers from 2024 onwards for {url}")
     return org_papers
@@ -301,7 +288,7 @@ def analyze_papers():
                 paper = current_papers[url]
                 
                 # Skip if paper is before 2024
-                if not is_from_2024_or_later(paper.get("date", "Unknown")):
+                if not pdf_analyzer.is_from_2024_or_later(paper.get("date", "Unknown")):
                     print(f"Skipping pre-2024 paper: {paper.get('title', 'Unknown')}")
                     continue
                     
@@ -318,13 +305,18 @@ def analyze_papers():
                 print(f"Using cached analysis for {url}")
             else:
                 try:
+                    # First check if it's from 2024 or later
+                    print(f"Checking date for: {url}")
+                    date = pdf_analyzer.extract_date_only(url)
+                    
+                    if not pdf_analyzer.is_from_2024_or_later(date):
+                        print(f"Skipping pre-2024 paper with date: {date}")
+                        continue
+                    
+                    # Only if it's from 2024 or later, proceed with full analysis
+                    print(f"Paper from 2024 or later ({date}), performing full analysis")
                     print(f"Analyzing {url} for virtual ward mentions")
                     analysis = pdf_analyzer.analyze_pdf_url(url)
-                    
-                    # Skip if paper is before 2024
-                    if not is_from_2024_or_later(analysis.get("date", "Unknown")):
-                        print(f"Skipping pre-2024 paper: {analysis.get('title', 'Unknown')}")
-                        continue
                     
                     result = {
                         "url": url,
@@ -371,7 +363,7 @@ def update_paper_analysis(url, analysis):
             if analysis.get("date") and analysis["date"] != "Unknown":
                 paper["date"] = analysis["date"]
                 # Update sort_date based on new date
-                paper["sort_date"] = analysis["date"] if is_from_2024_or_later(analysis["date"]) else "9999-99"
+                paper["sort_date"] = analysis["date"] if pdf_analyzer.is_from_2024_or_later(analysis["date"]) else "9999-99"
                 
             if analysis.get("title") and analysis["title"] != "Unknown":
                 paper["title"] = analysis["title"]

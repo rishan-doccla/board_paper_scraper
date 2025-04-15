@@ -382,6 +382,98 @@ class PDFAnalyzer:
         
         return results
 
+    def extract_date_only(self, pdf_path_or_url: str) -> str:
+        """Extract only the date from a PDF to determine if it's from 2024 or later.
+        
+        Args:
+            pdf_path_or_url: Path to PDF file or URL
+            
+        Returns:
+            The extracted date as a string or "Unknown"
+        """
+        logger.info(f"Extracting date only from: {pdf_path_or_url}")
+        try:
+            # Handle URL vs local file
+            if not os.path.exists(pdf_path_or_url):
+                # Download the PDF with proper headers
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                response = requests.get(pdf_path_or_url, headers=headers, stream=True, verify=False)
+                response.raise_for_status()
+                
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            temp_file.write(chunk)
+                pdf_path = temp_path
+            else:
+                pdf_path = pdf_path_or_url
+            
+            # Extract only the first 2 pages
+            reader = PdfReader(pdf_path)
+            text = ""
+            # Only read first 2 pages
+            for i in range(min(2, len(reader.pages))):
+                text += reader.pages[i].extract_text() + " "
+                
+            # Clean up if temp file
+            if not os.path.exists(pdf_path_or_url):
+                os.unlink(pdf_path)
+                
+            # Extract date with a focused prompt
+            prompt = """Extract ONLY the document date from this text.
+            Look for meeting dates, publication dates, or any dates that appear to be when the document was created.
+            
+            Return the date in YYYY-MM-DD format if possible, or any clear date format you find.
+            If multiple dates are found, choose the one most likely to be the document date.
+            
+            Respond with ONLY the date and nothing else. If no date is found, respond with "Unknown".
+            
+            Text:
+            {text}"""
+            
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt.format(text=text[:3000]))  # First 3000 chars should be enough
+            date = response.text.strip()
+            
+            logger.info(f"Extracted date: {date}")
+            return date
+            
+        except Exception as e:
+            logger.error(f"Error extracting date: {str(e)}")
+            return "Unknown"
+            
+    def is_from_2024_or_later(self, date_str: str) -> bool:
+        """Check if a paper's date is from 2024 or later"""
+        if date_str == "Unknown" or not date_str:
+            return False
+        
+        # Try to extract year from various date formats
+        try:
+            # Handle ISO format (YYYY-MM-DD)
+            if '-' in date_str and len(date_str) >= 4:
+                year = int(date_str.split('-')[0])
+                return year >= 2024
+            
+            # Handle other formats that have year at the beginning
+            elif len(date_str) >= 4 and date_str[:4].isdigit():
+                year = int(date_str[:4])
+                return year >= 2024
+                
+            # Handle formats with year at the end (e.g., "Jan 2024" or "January 2024")
+            elif " " in date_str and date_str.split()[-1].isdigit():
+                year = int(date_str.split()[-1])
+                return year >= 2024
+                
+            # Default to false if we can't determine the date
+            else:
+                return False
+        except:
+            return False
+
 # CLI for standalone use
 if __name__ == "__main__":
     data_dir = "data/pdfs"
