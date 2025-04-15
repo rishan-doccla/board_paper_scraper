@@ -110,7 +110,6 @@
                                         <tr>
                                             <th>Title</th>
                                             <th>Organization</th>
-                                            <th>Type</th>
                                             <th>Date</th>
                                             <th>Virtual Ward</th>
                                             <th>Summary</th>
@@ -121,10 +120,9 @@
                                         {% if results and results.board_papers %}
                                             {% for paper in results.board_papers %}
                                                 <tr class="paper-row {% if paper.is_new %}table-success new-paper{% endif %}">
-                                                    <td>{{ paper.title }}</td>
-                                                    <td>{{ paper.trust }}</td>
-                                                    <td>{{ paper.org_type }}</td>
-                                                    <td>{{ paper.date }}</td>
+                                                    <td>{{ paper.title if paper.title != "Unknown" else paper.filename }}</td>
+                                                    <td>{{ paper.organization if paper.organization != "Unknown" else paper.trust }}</td>
+                                                    <td>{{ paper.date if paper.date != "Unknown" else "" }}</td>
                                                     <td>
                                                         {% if paper.virtual_ward_mentioned %}
                                                             <span class="badge bg-success">Yes</span>
@@ -137,12 +135,12 @@
                                                             <button type="button" class="btn btn-sm btn-info" 
                                                                     data-bs-toggle="modal" 
                                                                     data-bs-target="#summaryModal"
-                                                                    data-summary="{{ paper.virtual_ward_summary }}"
-                                                                    data-title="{{ paper.title }}">
+                                                                    data-summary="{{ paper.summary }}"
+                                                                    data-title="{{ paper.title if paper.title != 'Unknown' else paper.filename }}">
                                                                 View Summary
                                                             </button>
                                                         {% else %}
-                                                            {{ paper.virtual_ward_summary }}
+                                                            {{ paper.summary }}
                                                         {% endif %}
                                                     </td>
                                                     <td>

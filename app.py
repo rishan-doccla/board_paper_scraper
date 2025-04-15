@@ -52,20 +52,33 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
     if scrape_only:
         return {
             "virtual_ward_mentioned": False,
-            "virtual_ward_summary": "Not analyzed (scrape-only mode)",
+            "summary": "Not analyzed (scrape-only mode)",
             "virtual_ward_mentions_count": 0
         }
     
     try:
         results = analyzer.analyze_pdf_url(paper["url"], verbose=False)
         print(f"  - Virtual ward mentioned: {results['virtual_ward_mentioned']}")
-        return results
+        
+        # Update paper with metadata if available
+        if results.get('title') and results['title'] != 'Unknown':
+            paper['title'] = results['title']
+        if results.get('date') and results['date'] != 'Unknown':
+            paper['date'] = results['date']
+        if results.get('organization') and results['organization'] != 'Unknown':
+            paper['organization'] = results['organization']
+        
+        return {
+            "virtual_ward_mentioned": results["virtual_ward_mentioned"],
+            "summary": results["summary"],
+            "virtual_ward_mentions_count": results["mentions_count"]
+        }
     except Exception as e:
         error_msg = f"Error analyzing PDF {paper['url']}: {str(e)}"
         print(error_msg)
         return {
             "virtual_ward_mentioned": False,
-            "virtual_ward_summary": f"Error during analysis: {str(e)}",
+            "summary": f"Error during analysis: {str(e)}",
             "virtual_ward_mentions_count": 0
         }
 
@@ -74,18 +87,22 @@ def create_paper_dict(paper, org_url, existing_papers):
     if type(paper) == list:
         print(paper)
         return {}
+    
+    # Get filename from the URL
+    filename = paper.get("title", "Unknown") if paper.get("title") != "Unknown" else paper["url"].split("/")[-1]
+    
     return {
         "url": paper["url"],
-        "title": paper["title"],
-        "date": "",
-        "trust": paper["trust"],
-        "organisation_url": org_url,
+        "filename": filename,
+        "title": paper.get("title", "Unknown"),
+        "date": paper.get("date", "Unknown"),
+        "trust": paper.get("trust", org_url),
+        "organization": paper.get("organization", "Unknown"),
         "virtual_ward_mentioned": False,
-        "virtual_ward_summary": "Not analyzed",
-        "virtual_ward_mentions_count": 0,
-        "is_new": (paper["url"], paper["title"]) not in existing_papers,
+        "summary": "Not analyzed",
+        "is_new": (paper["url"], paper.get("title", "Unknown")) not in existing_papers,
         "found_date": datetime.datetime.now().isoformat(),
-        "sort_date": "9999-99"
+        "sort_date": paper.get("date", "9999-99") if paper.get("date") != "Unknown" else "9999-99"
     }
 
 def update_and_save_results(papers):
@@ -109,8 +126,8 @@ async def process_organization(url, existing_papers, scrape_only=False):
             analysis_results = process_paper_analysis(paper_dict, pdf_analyzer, scrape_only)
             paper_dict.update({
                 "virtual_ward_mentioned": analysis_results["virtual_ward_mentioned"],
-                "virtual_ward_summary": analysis_results["summary"],
-                "virtual_ward_mentions_count": analysis_results["mentions_count"]
+                "summary": analysis_results["summary"],
+                "virtual_ward_mentions_count": analysis_results["virtual_ward_mentions_count"]
             })
         org_papers.append(paper_dict)
     

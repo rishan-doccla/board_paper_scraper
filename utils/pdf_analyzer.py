@@ -175,6 +175,69 @@ class PDFAnalyzer:
             logger.error(f"Error processing {pdf_path}: {str(e)}")
             raise
     
+    def extract_metadata(self, text: str) -> Dict[str, str]:
+        """Extract metadata from PDF text using Gemini."""
+        logger.info("Extracting metadata using Gemini API")
+        prompt = """Extract the following metadata from this document text:
+        1. Document Date: Find the most likely meeting or document date (in YYYY-MM-DD format if possible)
+        2. Document Title: Extract the main title of the document
+        3. Organization Name: Identify the NHS organization or trust name
+        
+        Respond in this EXACT format (including the triple backticks):
+        ```date
+        YYYY-MM-DD or any found date format
+        ```
+        ```title
+        DOCUMENT TITLE
+        ```
+        ```organization
+        ORGANIZATION NAME
+        ```
+        
+        If any field cannot be found, use "Unknown" as the value.
+        
+        Text to analyze (first 2000 characters):
+        {text}"""
+        
+        try:
+            # Only use first 2000 characters for metadata extraction
+            text_sample = text[:2000]
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content(prompt.format(text=text_sample))
+            content = response.text.strip()
+            
+            metadata = {
+                'date': 'Unknown',
+                'title': 'Unknown',
+                'organization': 'Unknown'
+            }
+            
+            # Parse the response
+            if '```date' in content:
+                date_start = content.find('```date\n') + 8
+                date_end = content.find('```', date_start)
+                metadata['date'] = content[date_start:date_end].strip()
+                
+            if '```title' in content:
+                title_start = content.find('```title\n') + 9
+                title_end = content.find('```', title_start)
+                metadata['title'] = content[title_start:title_end].strip()
+                
+            if '```organization' in content:
+                org_start = content.find('```organization\n') + 15
+                org_end = content.find('```', org_start)
+                metadata['organization'] = content[org_start:org_end].strip()
+            
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error extracting metadata: {str(e)}")
+            return {
+                'date': 'Unknown',
+                'title': 'Unknown',
+                'organization': 'Unknown'
+            }
+
     def analyze_pdf_url(self, url: str, verbose: bool = True) -> Dict[str, Any]:
         """
         Download and analyze a PDF from a URL.
@@ -184,12 +247,13 @@ class PDFAnalyzer:
             verbose: Whether to print progress messages
             
         Returns:
-            Dictionary with analysis results
+            Dictionary with analysis results and metadata
         """
         try:
             # Check if this is a local file
             if os.path.exists(url):
                 logger.info(f"Analyzing local PDF file: {url}")
+                text = self.extract_text_from_pdf(url)
                 mentions = self.analyze_pdf_file(url, verbose=verbose)
             else:
                 # Handle URL
@@ -210,11 +274,15 @@ class PDFAnalyzer:
                         if chunk:
                             temp_file.write(chunk)
                             
-                # Analyze the PDF
+                # Extract text and analyze the PDF
+                text = self.extract_text_from_pdf(temp_path)
                 mentions = self.analyze_pdf_file(temp_path, verbose=verbose)
                 
                 # Clean up the temporary file
                 os.unlink(temp_path)
+            
+            # Extract metadata
+            metadata = self.extract_metadata(text)
             
             # Create a summary if mentions were found
             if mentions:
@@ -227,7 +295,10 @@ class PDFAnalyzer:
                     "virtual_ward_mentioned": True,
                     "mentions_count": len(mentions),
                     "summary": summary,
-                    "detailed_mentions": mentions
+                    "detailed_mentions": mentions,
+                    "date": metadata['date'],
+                    "title": metadata['title'],
+                    "organization": metadata['organization']
                 }
                 logger.info(f"Found {len(mentions)} virtual ward mentions")
             else:
@@ -236,7 +307,10 @@ class PDFAnalyzer:
                     "virtual_ward_mentioned": False,
                     "mentions_count": 0,
                     "summary": "No mentions of virtual wards found in this document.",
-                    "detailed_mentions": []
+                    "detailed_mentions": [],
+                    "date": metadata['date'],
+                    "title": metadata['title'],
+                    "organization": metadata['organization']
                 }
                 logger.info("No virtual ward mentions found")
                 
@@ -249,7 +323,10 @@ class PDFAnalyzer:
                 "virtual_ward_mentioned": False,
                 "mentions_count": 0,
                 "summary": f"Error analyzing PDF: {str(e)}",
-                "detailed_mentions": []
+                "detailed_mentions": [],
+                "date": metadata['date'],
+                "title": metadata['title'],
+                "organization": metadata['organization']
             }
     
     def analyze_pdf_directory(self, directory_path: str, verbose: bool = True) -> Dict[str, List[Dict]]:
@@ -297,7 +374,10 @@ class PDFAnalyzer:
                     "virtual_ward_mentioned": False,
                     "mentions_count": 0,
                     "summary": f"Error analyzing PDF: {str(e)}",
-                    "detailed_mentions": []
+                    "detailed_mentions": [],
+                    "date": metadata['date'],
+                    "title": metadata['title'],
+                    "organization": metadata['organization']
                 })
         
         return results
