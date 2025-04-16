@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import datetime
@@ -8,6 +8,8 @@ from crawler.crawler import AdvancedCrawler
 from utils.config import Config
 import re
 from utils.pdf_analyzer import PDFAnalyzer
+import io
+import csv
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
@@ -513,6 +515,46 @@ def debug_paper(index):
         "terms_data_type": str(type(paper.get("terms_data"))),
         "terms_data_json": json.dumps(paper.get("terms_data", {}))
     })
+
+@app.route('/export-detailed-results', methods=['GET'])
+def export_detailed_results():
+    """Export detailed results (one row per term per paper) to a CSV file."""
+    if not latest_results or not latest_results.get("board_papers"):
+        return "No results to export.", 404
+        
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Define CSV Headers
+    headers = [
+        "Organisation", "Date", "Title", "Term", 
+        "Summary", "Mentions", "Link"
+    ]
+    writer.writerow(headers)
+    
+    # Write data rows (one row per term found in each paper)
+    for paper in latest_results["board_papers"]:
+        if paper.get("has_relevant_terms") and paper.get("terms_data"):
+            for term, term_data in paper["terms_data"].items():
+                # Combine list of summaries/quotes into single strings
+                summary_text = " ".join(term_data.get("summaries", []))
+                mentions_text = "\n\n".join(term_data.get("quotes", []))
+                
+                row = [
+                    paper.get("organization", "Unknown"),
+                    paper.get("date", "Unknown"),
+                    paper.get("title", "Unknown"),
+                    term,
+                    summary_text,
+                    mentions_text,
+                    paper.get("url", "")
+                ]
+                writer.writerow(row)
+                
+    # Create Flask response
+    response = Response(output.getvalue(), mimetype='text/csv')
+    response.headers["Content-Disposition"] = "attachment; filename=board_papers_detailed_export.csv"
+    return response
 
 if __name__ == '__main__':
     # Load existing data
