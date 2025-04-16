@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 import tempfile
 import logging
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +134,8 @@ CLEAR SUMMARY OF WHAT IS BEING DISCUSSED, INCLUDING INITIATIVES OR CHALLENGES
 
 BE EXTREMELY THOROUGH. Include terms even if they are only mentioned briefly or in passing. Don't miss any terms. Read tables carefully. If you see 'HF' or 'CHF', that means Heart Failure. If you see 'COPD', that refers to Chronic Obstructive Pulmonary Disease.
 
+IMPORTANT: Keep your summaries concise (2-3 sentences) and do not repeat the same information multiple times. Each summary should be a brief overview without repetition.
+
 If you find NO specific mentions of any terms, respond with: NO_RELEVANT_MENTIONS_FOUND
 
 Text to analyze:
@@ -191,16 +194,32 @@ Text to analyze:
                 mentions_start = section.find('```mentions\n') + 12
                 mentions_end = section.find('```', mentions_start)
                 if mentions_start > 11 and mentions_end != -1:
-                    mention['quotes'] = section[mentions_start:mentions_end].strip()
+                    quotes = section[mentions_start:mentions_end].strip()
+                    # Clean up any repetitive text in quotes
+                    mention['quotes'] = self.clean_repetitive_text(quotes)
                 
                 # Extract summary
                 summary_start = section.find('```summary\n') + 11
                 summary_end = section.find('```', summary_start)
                 if summary_start > 10 and summary_end != -1:
-                    mention['summary'] = section[summary_start:summary_end].strip()
+                    summary = section[summary_start:summary_end].strip()
+                    # Clean up any repetitive text in summary
+                    mention['summary'] = self.clean_repetitive_text(summary)
+                
+                # Check if this mentions NO_RELEVANT_MENTIONS_FOUND at the end
+                if mention.get('summary') and ('NO_RELEVANT_MENTIONS_FOUND' in mention['summary'] or 
+                                              'NO MENTIONS FOUND' in mention['summary'].upper()):
+                    # Remove the "no mentions found" part from the summary
+                    clean_summary = re.sub(r'NO_RELEVANT_MENTIONS_FOUND.*$', '', mention['summary'], 
+                                           flags=re.IGNORECASE | re.DOTALL)
+                    clean_summary = re.sub(r'NO MENTIONS FOUND.*$', '', clean_summary, 
+                                           flags=re.IGNORECASE | re.DOTALL)
+                    mention['summary'] = clean_summary.strip()
                 
                 if len(mention) == 3:  # Only add if we found all three parts
-                    mentions.append(mention)
+                    # Only include if we still have valid content after cleaning
+                    if mention['summary'].strip() and mention['quotes'].strip():
+                        mentions.append(mention)
             
             logger.info(f"Found {len(mentions)} term mentions in chunk")
             return mentions
@@ -549,6 +568,33 @@ Text to analyze:
                 return False
         except:
             return False
+
+    def clean_repetitive_text(self, text: str) -> str:
+        """Remove repetitive phrases from text."""
+        if not text or len(text) < 20:
+            return text
+            
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if len(sentences) <= 1:
+            return text
+            
+        # Remove exact duplicate sentences that appear consecutively
+        cleaned_sentences = []
+        for i, sentence in enumerate(sentences):
+            # If this sentence is not a duplicate of the previous one, keep it
+            if i == 0 or sentence.strip() != sentences[i-1].strip():
+                cleaned_sentences.append(sentence)
+                
+        # Join the cleaned sentences
+        cleaned_text = ' '.join(cleaned_sentences)
+        
+        # Also handle repeated phrases (not just sentences)
+        # This pattern finds repeated phrases of 10+ characters that appear at least twice
+        repeated_phrase_pattern = r'(\b\w{5,}\b.{5,}\b\w{5,}\b)(\s+\1)+'
+        cleaned_text = re.sub(repeated_phrase_pattern, r'\1', cleaned_text)
+        
+        return cleaned_text
 
 # CLI for standalone use
 if __name__ == "__main__":

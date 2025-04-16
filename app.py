@@ -84,20 +84,35 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
             quotes = data.get("quotes", [])
             if isinstance(quotes, str):
                 quotes = [quotes]
+            else:
+                # Apply cleaning to each quote
+                quotes = [analyzer.clean_repetitive_text(q) for q in quotes if q]
                 
             summaries = data.get("summaries", [])
             if isinstance(summaries, str):
                 summaries = [summaries]
+            else:
+                # Apply cleaning to each summary
+                summaries = [analyzer.clean_repetitive_text(s) for s in summaries if s]
                 
-            clean_terms_data[term] = {
-                "quotes": quotes,
-                "summaries": summaries
-            }
+            # Remove empty or too short summaries/quotes
+            quotes = [q for q in quotes if q and len(q.strip()) > 10]
+            summaries = [s for s in summaries if s and len(s.strip()) > 10]
+            
+            # Only include the term if we have valid quotes and summaries after cleaning
+            if quotes and summaries:
+                clean_terms_data[term] = {
+                    "quotes": quotes,
+                    "summaries": summaries
+                }
+        
+        # Update terms_found to only include terms that have valid data after cleaning
+        valid_terms = list(clean_terms_data.keys())
         
         return {
-            "has_relevant_terms": results["has_relevant_terms"],
-            "terms_found": results["terms_found"],
-            "terms_count": results["terms_count"],
+            "has_relevant_terms": len(valid_terms) > 0,
+            "terms_found": valid_terms,
+            "terms_count": len(valid_terms),
             "terms_data": clean_terms_data
         }
     except Exception as e:
@@ -380,27 +395,41 @@ def update_paper_analysis(url, analysis):
     """Update paper analysis in latest_results"""
     for paper in latest_results["board_papers"]:
         if paper["url"] == url:
-            # Basic fields
-            paper["has_relevant_terms"] = analysis["has_relevant_terms"]
-            paper["terms_found"] = analysis["terms_found"]
-            paper["terms_count"] = analysis["terms_count"]
-            
             # Handle terms_data with proper formatting
             clean_terms_data = {}
             for term, data in analysis.get("terms_data", {}).items():
                 quotes = data.get("quotes", [])
                 if isinstance(quotes, str):
                     quotes = [quotes]
+                else:
+                    # Apply cleaning to each quote
+                    quotes = [pdf_analyzer.clean_repetitive_text(q) for q in quotes if q]
                     
                 summaries = data.get("summaries", [])
                 if isinstance(summaries, str):
                     summaries = [summaries]
+                else:
+                    # Apply cleaning to each summary
+                    summaries = [pdf_analyzer.clean_repetitive_text(s) for s in summaries if s]
                     
-                clean_terms_data[term] = {
-                    "quotes": quotes,
-                    "summaries": summaries
-                }
+                # Remove empty or too short summaries/quotes
+                quotes = [q for q in quotes if q and len(q.strip()) > 10]
+                summaries = [s for s in summaries if s and len(s.strip()) > 10]
+                
+                # Only include the term if we have valid quotes and summaries after cleaning
+                if quotes and summaries:
+                    clean_terms_data[term] = {
+                        "quotes": quotes,
+                        "summaries": summaries
+                    }
             
+            # Update terms_found to only include terms that have valid data after cleaning
+            valid_terms = list(clean_terms_data.keys())
+            
+            # Basic fields
+            paper["has_relevant_terms"] = len(valid_terms) > 0
+            paper["terms_found"] = valid_terms
+            paper["terms_count"] = len(valid_terms)
             paper["terms_data"] = clean_terms_data
             
             # Update paper metadata if available
