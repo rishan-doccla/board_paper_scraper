@@ -13,7 +13,7 @@ steps:
       - board-paper-scraper
       - --image=gcr.io/$PROJECT_ID/board-paper-scraper
       - --region=europe-west1
-      - --memory=2Gi 
+      - --memory=2Gi
       - --timeout=600s
       - --platform=managed
       - --allow-unauthenticated
