@@ -1,0 +1,36 @@
+# .github/workflows/deploy.yml
+name: Build & Deploy to Cloud Run
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/board-paper-scraper:latest
+
+      - name: Set up GCP credentials
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy board-paper-scraper \
+            --image=gcr.io/${{ secrets.GCP_PROJECT_ID }}/board-paper-scraper:latest \
+            --region=europe-west1 \
+            --platform=managed \
+            --memory=2Gi \
+            --timeout=600s \
+            --allow-unauthenticated

@@ -1,4 +1,4 @@
-# NHS Crawler package 
+# NHS Crawler package
 from .crawler import AdvancedCrawler
 
-__all__ = ['AdvancedCrawler']
+__all__ = ["AdvancedCrawler"]

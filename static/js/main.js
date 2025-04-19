@@ -10,14 +10,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const scrapeOnlyBtn = document.getElementById('scrapeOnlyBtn');
     const testUrlsStatus = document.getElementById('testUrlsStatus');
     const urlInput = document.getElementById('urlInput');
-    
+
     // Run crawler button
     if (runCrawlerBtn) {
         runCrawlerBtn.addEventListener('click', function() {
             // Disable button and show status
             runCrawlerBtn.disabled = true;
             crawlerStatus.classList.remove('d-none');
-            
+
             // Call the API to run the crawler
             fetch('/run-crawler', {
                 method: 'POST',
@@ -29,10 +29,10 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 // Update the table with new results
                 updatePapersTable(data.results.board_papers);
-                
+
                 // Show success message
                 alert('Crawler completed successfully!');
-                
+
                 // Reload the page to show updated results
                 window.location.reload();
             })
@@ -47,34 +47,34 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+
     // Test specific URLs button
     if (testUrlsBtn) {
         testUrlsBtn.addEventListener('click', function() {
             // Get the URLs from the input
             const urlsText = urlInput.value.trim();
-            
+
             if (!urlsText) {
                 alert('Please enter at least one URL to test.');
                 return;
             }
-            
+
             // Parse URLs with @ prefix or regular line-by-line format
             const urls = parseUrlInput(urlsText);
-            
+
             if (urls.length === 0) {
                 alert('Please enter at least one valid URL to test.');
                 return;
             }
-            
+
             // Disable button and show status
             testUrlsBtn.disabled = true;
             testUrlsStatus.classList.remove('d-none');
-            
+
             // Call the API to test the URLs
             const payload = { urls: urls };
             console.log("Sending payload to server:", payload);
-            
+
             fetch('/test-specific-urls', {
                 method: 'POST',
                 headers: {
@@ -92,10 +92,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status === 'success') {
                     // Update the table with new results
                     updatePapersTable(data.results.board_papers);
-                    
+
                     // Show success message
                     alert(`Test completed successfully! Found ${data.results.board_papers.length} papers.`);
-                    
+
                     // Reload the page to show updated results
                     window.location.reload();
                 } else {
@@ -122,38 +122,38 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+
     // Scrape Only button
     if (scrapeOnlyBtn) {
         scrapeOnlyBtn.addEventListener('click', function() {
             // Get the URLs from the input
             const urlsText = urlInput.value.trim();
-            
+
             if (!urlsText) {
                 alert('Please enter at least one URL to test.');
                 return;
             }
-            
+
             // Parse URLs with @ prefix or regular line-by-line format
             const urls = parseUrlInput(urlsText);
-            
+
             if (urls.length === 0) {
                 alert('Please enter at least one valid URL to test.');
                 return;
             }
-            
+
             // Disable buttons and show status
             scrapeOnlyBtn.disabled = true;
             testUrlsBtn.disabled = true;
             testUrlsStatus.classList.remove('d-none');
             testUrlsStatus.querySelector('span:last-child').textContent = 'Scraping URLs... This may take a while.';
-            
+
             // Call the API to test the URLs with scrape_only flag
-            const payload = { 
+            const payload = {
                 urls: urls,
                 scrape_only: true  // This flag tells the backend to skip PDF analysis
             };
-            
+
             fetch('/test-specific-urls', {
                 method: 'POST',
                 headers: {
@@ -171,10 +171,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status === 'success') {
                     // Update the table with new results
                     updatePapersTable(data.results.board_papers);
-                    
+
                     // Show success message
                     alert(`Scraping completed successfully! Found ${data.results.board_papers.length} papers.`);
-                    
+
                     // Reload the page to show updated results
                     window.location.reload();
                 } else {
@@ -202,16 +202,16 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+
     // Function to parse URL input text that may contain @ prefixes
     function parseUrlInput(inputText) {
         console.log("Parsing URL input:", inputText);
-        
+
         // First check if the input contains @ symbols (for the special format)
         if (inputText.includes('@')) {
             // Find all URLs with @ prefix
             const urlMatches = inputText.match(/@https?:\/\/[^\s]+/g);
-            
+
             if (urlMatches) {
                 console.log("Found @ prefixed URLs:", urlMatches);
                 // Remove the @ prefix from each URL
@@ -230,12 +230,12 @@ document.addEventListener('DOMContentLoaded', function() {
             return parsedUrls;
         }
     }
-    
+
     // Show new papers only checkbox
     if (showNewOnlyCheckbox) {
         showNewOnlyCheckbox.addEventListener('change', function() {
             const paperRows = document.querySelectorAll('.paper-row');
-            
+
             if (this.checked) {
                 // Show only new papers
                 paperRows.forEach(row => {
@@ -251,12 +251,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Function to update the papers table
     function updatePapersTable(papers) {
         // Clear the table
         papersTableBody.innerHTML = '';
-        
+
         if (papers && papers.length > 0) {
             // Sort papers chronologically by sort_date (yyyy-mm format)
             papers.sort((a, b) => {
@@ -269,17 +269,17 @@ document.addEventListener('DOMContentLoaded', function() {
             papers.forEach(paper => {
                 const row = document.createElement('tr');
                 row.className = `paper-row ${paper.is_new ? 'table-success new-paper' : ''}`;
-                
+
                 // Extract year and month for display
                 let formattedDate = paper.date || '';
-                
+
                 // Try to improve the date display using sort_date if available
                 if (paper.sort_date && paper.sort_date !== '9999-99') {
                     const parts = paper.sort_date.split('-');
                     if (parts.length === 2) {
                         const year = parts[0];
                         const monthNum = parseInt(parts[1]);
-                        
+
                         if (monthNum > 0 && monthNum <= 12) {
                             const monthNames = [
                                 'January', 'February', 'March', 'April', 'May', 'June',
@@ -291,7 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                 }
-                
+
                 row.innerHTML = `
                     <td>${paper.title}</td>
                     <td>${paper.organization}</td>
@@ -301,7 +301,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <a href="${paper.url}" target="_blank" class="btn btn-sm btn-primary">View</a>
                     </td>
                 `;
-                
+
                 papersTableBody.appendChild(row);
             });
         } else {
@@ -313,4 +313,4 @@ document.addEventListener('DOMContentLoaded', function() {
             papersTableBody.appendChild(row);
         }
     }
-}); 
+});

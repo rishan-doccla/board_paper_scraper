@@ -32,4 +32,4 @@ A Flask application that scrapes NHS Trust and ICB websites for board papers, an
 - `models/`: Database models
 - `static/`: Static files (CSS, JavaScript)
 - `templates/`: HTML templates
-- `utils/`: Utility functions 
+- `utils/`: Utility functions
