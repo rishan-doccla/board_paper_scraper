@@ -184,7 +184,9 @@ async def process_organization(url, existing_papers, scrape_only=False):
         if not scrape_only:
             # First, just extract the date to check if it's from 2024 or later
             print(f"Checking date for: {paper_dict['url']}")
-            date = pdf_analyzer.extract_date_only(paper_dict["url"])
+            date = pdf_analyzer.extract_date_only(
+                paper_dict["url"], keep_temp_file=True
+            )
             paper_dict["date"] = date
 
             # Only proceed with full analysis if the paper is from 2024 or later
@@ -211,7 +213,9 @@ async def process_organization(url, existing_papers, scrape_only=False):
             org_papers.append(paper_dict)
         elif scrape_only:
             # In scrape-only mode, check date if not already present
-            date = pdf_analyzer.extract_date_only(paper_dict["url"])
+            date = pdf_analyzer.extract_date_only(
+                paper_dict["url"], keep_temp_file=True
+            )
             paper_dict["date"] = date
             if pdf_analyzer.is_from_2024_or_later(date):
                 org_papers.append(paper_dict)
@@ -384,7 +388,7 @@ def analyze_papers():
                 try:
                     # First check if it's from 2024 or later
                     print(f"Checking date for: {url}")
-                    date = pdf_analyzer.extract_date_only(url)
+                    date = pdf_analyzer.extract_date_only(url, keep_temp_file=True)
 
                     if not pdf_analyzer.is_from_2024_or_later(date):
                         print(f"Skipping pre-2024 paper with date: {date}")
