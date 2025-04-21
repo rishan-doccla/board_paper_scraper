@@ -36,6 +36,12 @@ class PDFAnalyzer:
         genai.configure(api_key=self.api_key)
         logger.info("PDFAnalyzer initialized with API key")
 
+        # Simple in‑memory cache to avoid downloading the same PDF twice in
+        # a single run.  The key is the original URL, the value is a dict
+        # with ("path", "date").  Paths are deleted only when explicitly
+        # requested so callers can decide when to free disk space.
+        self._download_cache: Dict[str, Dict[str, str]] = {}
+
     def clean_text(self, text: str) -> str:
         """Clean and normalize text from PDF."""
         # Replace multiple newlines with a single one
@@ -345,32 +351,43 @@ Text to analyze:
                 text = self.extract_text_from_pdf(url)
                 mentions = self.analyze_pdf_file(url, verbose=verbose)
             else:
-                # Handle URL
-                if verbose:
-                    logger.info(f"Downloading PDF from {url}")
+                # Remote URL – check cache first
+                cached = self._download_cache.get(url)
+                if cached and os.path.exists(cached.get("path", "")):
+                    if verbose:
+                        logger.info("Using cached PDF download")
+                    temp_path = cached["path"]
+                else:
+                    if verbose:
+                        logger.info(f"Downloading PDF from {url}")
 
-                # Download the PDF with proper headers
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                }
-                response = requests.get(url, headers=headers, stream=True, verify=False)
-                response.raise_for_status()
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                    }
+                    response = requests.get(
+                        url, headers=headers, stream=True, verify=False
+                    )
+                    response.raise_for_status()
 
-                # Create a temporary file
-                with tempfile.NamedTemporaryFile(
-                    suffix=".pdf", delete=False
-                ) as temp_file:
-                    temp_path = temp_file.name
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            temp_file.write(chunk)
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".pdf", delete=False
+                    ) as tmp:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                tmp.write(chunk)
+                        temp_path = tmp.name
+
+                    # Put into cache for possible later reuse
+                    self._download_cache[url] = {"path": temp_path}
 
                 # Extract text and analyze the PDF
                 text = self.extract_text_from_pdf(temp_path)
                 mentions = self.analyze_pdf_file(temp_path, verbose=verbose)
 
-                # Clean up the temporary file
-                os.unlink(temp_path)
+                # Note: we deliberately do NOT delete temp_path here if it is in
+                # the cache, so that the same file can be reused by later calls
+                # during this run.  Cleanup can be handled at process exit or
+                # by an explicit cache‑clearing routine if needed.
 
             # Extract metadata
             metadata = self.extract_metadata(text)
@@ -499,70 +516,80 @@ Text to analyze:
 
         return results
 
-    def extract_date_only(self, pdf_path_or_url: str) -> str:
-        """Extract only the date from a PDF to determine if it's from 2024 or later.
+    def extract_date_only(
+        self, pdf_path_or_url: str, *, keep_temp_file: bool = False
+    ) -> str:
+        """Extract only the date from a PDF.
 
-        Args:
-            pdf_path_or_url: Path to PDF file or URL
-
-        Returns:
-            The extracted date as a string or "Unknown"
+        If *keep_temp_file* is ``True`` and *pdf_path_or_url* is a remote URL, the
+        downloaded file is cached so that subsequent full analysis calls do not
+        need to download it again.  When ``False`` (default) the temporary file
+        is deleted immediately after the date has been extracted.
         """
         logger.info(f"Extracting date only from: {pdf_path_or_url}")
+
+        # Return cached date if we already processed this URL earlier in the run.
+        cached = self._download_cache.get(pdf_path_or_url)
+        if cached and cached.get("date"):
+            logger.info("Using cached date result")
+            return cached["date"]
+
         try:
-            # Handle URL vs local file
-            if not os.path.exists(pdf_path_or_url):
-                # Download the PDF with proper headers
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                }
-                response = requests.get(
-                    pdf_path_or_url, headers=headers, stream=True, verify=False
-                )
-                response.raise_for_status()
-
-                # Create a temporary file
-                with tempfile.NamedTemporaryFile(
-                    suffix=".pdf", delete=False
-                ) as temp_file:
-                    temp_path = temp_file.name
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            temp_file.write(chunk)
-                pdf_path = temp_path
-            else:
+            # Determine where the PDF lives and fetch if necessary
+            if os.path.exists(pdf_path_or_url):
                 pdf_path = pdf_path_or_url
+            else:
+                # If we already downloaded it earlier, reuse it
+                if cached and os.path.exists(cached.get("path", "")):
+                    pdf_path = cached["path"]
+                else:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                    }
+                    response = requests.get(
+                        pdf_path_or_url, headers=headers, stream=True, verify=False
+                    )
+                    response.raise_for_status()
 
-            # Extract only the first 2 pages
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".pdf", delete=False
+                    ) as tmp:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                tmp.write(chunk)
+                        pdf_path = tmp.name
+
+                    # Store in cache so we can reuse the file later if needed
+                    self._download_cache[pdf_path_or_url] = {"path": pdf_path}
+
+            # Extract first two pages for date detection
             reader = PdfReader(pdf_path)
             text = ""
-            # Only read first 2 pages
             for i in range(min(2, len(reader.pages))):
-                text += reader.pages[i].extract_text() + " "
+                page_text = reader.pages[i].extract_text() or ""
+                text += page_text + " "
 
-            # Clean up if temp file
-            if not os.path.exists(pdf_path_or_url):
-                os.unlink(pdf_path)
-
-            # Extract date with a focused prompt
-            prompt = """Extract ONLY the document date from this text.
-            Look for meeting dates, publication dates, or any dates that appear to be when the document was created.
-
-            Return the date in YYYY-MM-DD format if possible, or any clear date format you find.
-            If multiple dates are found, choose the one most likely to be the document date.
-
-            Respond with ONLY the date and nothing else. If no date is found, respond with "Unknown".
-
-            Text:
-            {text}"""
+            prompt = """Extract ONLY the document date from this text.\nLook for meeting dates, publication dates, or any dates that appear to be when the document was created.\n\nReturn the date in YYYY-MM-DD format if possible, or any clear date format you find.\nIf multiple dates are found, choose the one most likely to be the document date.\n\nRespond with ONLY the date and nothing else. If no date is found, respond with \"Unknown\".\n\nText:\n{text}"""
 
             model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(
-                prompt.format(text=text[:3000])
-            )  # First 3000 chars should be enough
+            response = model.generate_content(prompt.format(text=text[:3000]))
             date = response.text.strip()
 
             logger.info(f"Extracted date: {date}")
+
+            # Update cache with date information so future calls can reuse it
+            if pdf_path_or_url in self._download_cache:
+                self._download_cache[pdf_path_or_url]["date"] = date
+
+            # Clean up file immediately if caller doesn't need it later
+            if (not keep_temp_file) and (not os.path.exists(pdf_path_or_url)):
+                try:
+                    os.unlink(pdf_path)
+                    # Remove cached entry because path is now invalid
+                    self._download_cache.pop(pdf_path_or_url, None)
+                except Exception:
+                    pass
+
             return date
 
         except Exception as e:

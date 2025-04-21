@@ -1,4 +1,6 @@
 import asyncio
+import os
+import platform
 
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import BM25ContentFilter
@@ -17,12 +19,58 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
-# Selenium options for headless Chromium
-options = Options()
-options.binary_location = "/usr/bin/chromium"
-options.add_argument("--headless")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
+# ---------------------------------------------------------------------------
+# Selenium / Chrome setup
+# ---------------------------------------------------------------------------
+# The container image used in production includes the Chromium binary at
+# /usr/bin/chromium and a matching chromedriver at /usr/bin/chromedriver.  When
+# developing locally on macOS (or any environment where Chrome is installed in
+# the standard location) we should **not** override the binary path – Selenium
+# Manager can discover the correct driver automatically.  The helper below
+# prepares a consistent, headless `Options` instance for all platforms and
+# chooses the appropriate driver path.
+
+
+def _make_headless_options() -> Options:
+    """Return a headless `selenium.webdriver.ChromeOptions` instance."""
+
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+
+    # Use the Chromium binary shipped in the Linux container when running on
+    # Linux servers.  On macOS/Windows we leave `binary_location` unset so that
+    # the system installation of Chrome/Chromium is used.
+    if platform.system() == "Linux":
+        opts.binary_location = "/usr/bin/chromium"
+
+    return opts
+
+
+def _create_webdriver() -> webdriver.Chrome:
+    """Create a cross‑platform headless Chrome driver.
+
+    Priority:
+    1. Use the explicit CHROMEDRIVER_PATH env var if provided and valid.
+    2. On Linux try the well‑known location used in the container.
+    3. Fallback to Selenium Manager auto‑download (requires Selenium ≥4.6).
+    """
+
+    opts = _make_headless_options()
+
+    # 1. Explicit override via env
+    driver_path = os.getenv("CHROMEDRIVER_PATH")
+
+    # 2. Container default on Linux
+    if not driver_path and platform.system() == "Linux":
+        driver_path = "/usr/bin/chromedriver"
+
+    # 3. If no path or file missing, rely on Selenium Manager
+    if driver_path and os.path.exists(driver_path):
+        return webdriver.Chrome(service=Service(driver_path), options=opts)
+
+    return webdriver.Chrome(options=opts)
 
 
 class AdvancedCrawler:
@@ -40,9 +88,7 @@ class AdvancedCrawler:
         self.include_external = include_external
 
     def _get_pagination_if_exists(self, url):
-        driver = webdriver.Chrome(
-            service=Service("/usr/bin/chromedriver"), options=options
-        )
+        driver = _create_webdriver()
 
         try:
             driver.get(url)
