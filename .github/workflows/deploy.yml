@@ -46,6 +46,7 @@ jobs:
             --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/board-paper-scraper:latest \
             --region europe-west1 \
             --platform managed \
+            --service-account cloudrun-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --memory=2Gi \
             --timeout=600s \
             --allow-unauthenticated
