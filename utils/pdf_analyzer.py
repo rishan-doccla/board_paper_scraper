@@ -11,6 +11,12 @@ import requests
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 
+from .prompt_helper import (
+    get_analysis_prompt,
+    get_date_extraction_prompt,
+    get_metadata_prompt,
+)
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,18 +34,21 @@ class PDFAnalyzer:
     def __init__(self, api_key=None):
         """Initialize the PDFAnalyzer with optional API key."""
         # Use provided API key or get from environment
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
+        _api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not _api_key:
             raise ValueError("Gemini API key is required")
 
         # Configure Gemini
-        genai.configure(api_key=self.api_key)
-        logger.info("PDFAnalyzer initialized with API key")
+        genai.configure(api_key=_api_key)
+        logger.debug("PDFAnalyzer initialized")  # Downgrade to debug
 
-        # Simple in‑memory cache to avoid downloading the same PDF twice in
-        # a single run.  The key is the original URL, the value is a dict
-        # with ("path", "date").  Paths are deleted only when explicitly
-        # requested so callers can decide when to free disk space.
+        # Initialize models as class attributes
+        self._model = genai.GenerativeModel("gemini-2.0-flash")
+        self._date_model = genai.GenerativeModel(
+            "gemini-2.5-pro-preview-03-25"
+        )  # Used for date extraction
+
+        # Cache for downloaded PDFs
         self._download_cache: Dict[str, Dict[str, str]] = {}
 
     def clean_text(self, text: str) -> str:
@@ -59,23 +68,20 @@ class PDFAnalyzer:
         return text
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text content from a PDF file with improved handling of formatting."""
-        logger.info(f"Extracting text from PDF: {pdf_path}")
+        """Extract text content from a PDF file."""
+        logger.debug(f"Extracting text from: {pdf_path}")  # Downgrade to debug
         try:
             reader = PdfReader(pdf_path)
             text = ""
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
-                    # Clean the text
-                    page_text = self.clean_text(page_text)
-                    text += page_text + " "
+                    text += self.clean_text(page_text) + " "
                 else:
-                    # If extract_text() returns empty (possibly due to images/tables)
-                    logger.warning(f"Empty text extracted from page in {pdf_path}")
+                    logger.debug(f"Empty page in {pdf_path}")  # Downgrade to debug
 
             if not text.strip():
-                logger.warning(f"No text could be extracted from {pdf_path}")
+                logger.warning(f"No text extracted from {pdf_path}")
                 return "No text could be extracted from this PDF."
 
             logger.info(f"Successfully extracted {len(reader.pages)} pages")
@@ -85,374 +91,255 @@ class PDFAnalyzer:
             raise
 
     def chunk_text(self, text: str, chunk_size: int = 15000) -> List[str]:
-        """Split text into chunks to avoid token limits."""
-        words = text.split()
+        """Split text into chunks of approximately chunk_size characters."""
         chunks = []
-        current_chunk = []
-        current_size = 0
+        start = 0
+        text_len = len(text)
 
-        for word in words:
-            current_size += len(word) + 1  # +1 for space
-            if current_size > chunk_size:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [word]
-                current_size = len(word)
-            else:
-                current_chunk.append(word)
+        while start < text_len:
+            if start + chunk_size >= text_len:
+                chunks.append(text[start:])
+                break
 
-        if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            # Find the last whitespace within the chunk_size limit
+            split_point = start + chunk_size
+            while split_point > start and not text[split_point - 1].isspace():
+                split_point -= 1
 
-        # Ensure we have at least one chunk
-        if not chunks and text:
-            chunks = [text[: min(chunk_size, len(text))]]
+            # If no good break point found, force split at chunk_size
+            if split_point == start:
+                split_point = start + chunk_size
 
-        logger.info(f"Split text into {len(chunks)} chunks")
+            chunks.append(text[start:split_point])
+            start = split_point.lstrip()
+
+        logger.debug(f"Split into {len(chunks)} chunks")
         return chunks
 
+    def _parse_gemini_response(self, content: str) -> List[Dict]:
+        """Parse the structured response from Gemini into a list of mentions."""
+        if content == "NO_RELEVANT_MENTIONS_FOUND":
+            logger.info("No relevant term mentions found in chunk")
+            return []
+
+        mentions = []
+        sections = content.split("---")
+
+        for section in sections:
+            if not section.strip():
+                continue
+
+            mention = self._extract_mention_from_section(section)
+            if mention:
+                mentions.append(mention)
+
+        logger.info(f"Found {len(mentions)} term mentions in chunk")
+        return mentions
+
+    def _extract_mention_from_section(self, section: str) -> Optional[Dict]:
+        """Extract a structured mention from a response section."""
+        mention = {}
+
+        # Helper function to extract content between backticks
+        def extract_content(marker: str, offset: int) -> Optional[str]:
+            start = section.find(f"```{marker}\n") + offset
+            if start <= offset - 1:  # Not found
+                return None
+            end = section.find("```", start)
+            if end == -1:  # No closing backticks
+                return None
+            return section[start:end].strip()
+
+        # Extract each component
+        mention["term"] = extract_content("term", 8)
+        quotes = extract_content("mentions", 12)
+        summary = extract_content("summary", 11)
+
+        if not all([mention["term"], quotes, summary]):
+            return None
+
+        # Clean the content
+        mention["quotes"] = self.clean_repetitive_text(quotes)
+        mention["summary"] = self._clean_summary(summary)
+
+        # Only return if we have valid content after cleaning
+        if mention["summary"].strip() and mention["quotes"].strip():
+            return mention
+        return None
+
+    def _clean_summary(self, summary: str) -> str:
+        """Clean a summary by removing 'no mentions found' messages and repetitive text."""
+        if not summary:
+            return ""
+
+        # Remove "no mentions found" messages
+        for pattern in [r"NO_RELEVANT_MENTIONS_FOUND.*$", r"NO MENTIONS FOUND.*$"]:
+            summary = re.sub(pattern, "", summary, flags=re.IGNORECASE | re.DOTALL)
+
+        # Clean repetitive text
+        return self.clean_repetitive_text(summary.strip())
+
     def analyze_text_chunk(self, text: str) -> List[Dict]:
-        """Analyze a chunk of text for multiple healthcare terms."""
-        logger.info("Analyzing text chunk with Gemini API")
-        prompt = """I want you to work as a board paper analyser for healthcare documents. Within the text provided, scan CAREFULLY for ANY mentions of the following healthcare terms, even if they appear only once or in tables.
-
-Please analyze for ALL mentions of the following terms (including variations, abbreviations, plurals, and related concepts):
-
-- COPD (Chronic Obstructive Pulmonary Disease, chronic lung disease, lung conditions)
-- Heart Failure (cardiac failure, CHF, HF, heart conditions, cardiac conditions, heart disease)
-- Long term conditions (LTCs, chronic conditions, ongoing health needs, long-term illness)
-- Proactive (preventative, early intervention, upstream work, proactively)
-- Prevention (preventative care, early intervention, risk reduction, preventing)
-- Neighbourhood (place-based care, community care, local care, locality)
-- Left shift (care moving from acute to community, hospital to home, shifting care)
-- Rising risk (patients at risk, high risk cohorts, risk stratification, at-risk patients)
-- Virtual wards (virtual care, virtual hospital, remote monitoring, virtual ward)
-
-IMPORTANT: For each term where you find ANY mention in the text, respond using this format:
-
-```term
-TERM_NAME
-```
-```mentions
-EXACT QUOTE(S) FROM THE TEXT WHERE THE TERM APPEARS (include enough context)
-```
-```summary
-CLEAR SUMMARY OF WHAT IS BEING DISCUSSED, INCLUDING INITIATIVES OR CHALLENGES
-```
----
-
-BE EXTREMELY THOROUGH. Include terms even if they are only mentioned briefly or in passing. Don't miss any terms. Read tables carefully. If you see 'HF' or 'CHF', that means Heart Failure. If you see 'COPD', that refers to Chronic Obstructive Pulmonary Disease.
-
-IMPORTANT: Keep your summaries concise (2-3 sentences) and do not repeat the same information multiple times. Each summary should be a brief overview without repetition.
-
-If you find NO specific mentions of any terms, respond with: NO_RELEVANT_MENTIONS_FOUND
-
-Text to analyze:
-{text}"""
-
+        """Analyze a chunk of text for healthcare terms."""
         try:
-            # Use the original model
-            model = genai.GenerativeModel("gemini-2.0-flash")
-
-            # Set generation config with longer timeout for complex documents
-            generation_config = {
-                "temperature": 0.2,  # Lower temperature for more focused extraction
-                "top_p": 0.95,
-                "top_k": 40,
-                "max_output_tokens": 8192,  # Allow longer responses
-            }
-
-            # Make API call with timeout handling
-            safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                }
-            ]
-
-            response = model.generate_content(
-                prompt.format(text=text),
-                generation_config=generation_config,
-                safety_settings=safety_settings,
-            )
-
-            content = response.text.strip()
-
-            # If no mentions found
-            if content == "NO_RELEVANT_MENTIONS_FOUND":
-                logger.info("No relevant term mentions found in chunk")
-                return []
-
-            # Parse the response format
-            mentions = []
-            sections = content.split("---")
-
-            for section in sections:
-                if not section.strip():
-                    continue
-
-                mention = {}
-
-                # Extract term
-                term_start = section.find("```term\n") + 8
-                term_end = section.find("```", term_start)
-                if term_start > 7 and term_end != -1:
-                    mention["term"] = section[term_start:term_end].strip()
-
-                # Extract mentions/quotes
-                mentions_start = section.find("```mentions\n") + 12
-                mentions_end = section.find("```", mentions_start)
-                if mentions_start > 11 and mentions_end != -1:
-                    quotes = section[mentions_start:mentions_end].strip()
-                    # Clean up any repetitive text in quotes
-                    mention["quotes"] = self.clean_repetitive_text(quotes)
-
-                # Extract summary
-                summary_start = section.find("```summary\n") + 11
-                summary_end = section.find("```", summary_start)
-                if summary_start > 10 and summary_end != -1:
-                    summary = section[summary_start:summary_end].strip()
-                    # Clean up any repetitive text in summary
-                    mention["summary"] = self.clean_repetitive_text(summary)
-
-                # Check if this mentions NO_RELEVANT_MENTIONS_FOUND at the end
-                if mention.get("summary") and (
-                    "NO_RELEVANT_MENTIONS_FOUND" in mention["summary"]
-                    or "NO MENTIONS FOUND" in mention["summary"].upper()
-                ):
-                    # Remove the "no mentions found" part from the summary
-                    clean_summary = re.sub(
-                        r"NO_RELEVANT_MENTIONS_FOUND.*$",
-                        "",
-                        mention["summary"],
-                        flags=re.IGNORECASE | re.DOTALL,
-                    )
-                    clean_summary = re.sub(
-                        r"NO MENTIONS FOUND.*$",
-                        "",
-                        clean_summary,
-                        flags=re.IGNORECASE | re.DOTALL,
-                    )
-                    mention["summary"] = clean_summary.strip()
-
-                if len(mention) == 3:  # Only add if we found all three parts
-                    # Only include if we still have valid content after cleaning
-                    if mention["summary"].strip() and mention["quotes"].strip():
-                        mentions.append(mention)
-
-            logger.info(f"Found {len(mentions)} term mentions in chunk")
-            return mentions
-
+            prompt = get_analysis_prompt(text)
+            content = self._call_gemini(prompt)
+            return self._parse_gemini_response(content)
         except Exception as e:
-            logger.error(f"Error analyzing text chunk: {str(e)}")
-            logger.error(
-                f"Raw response:\n{content if 'content' in locals() else 'No response'}"
+            logger.error(f"Text chunk analysis failed: {e}")
+            logger.debug(
+                f"Raw response: {content if 'content' in locals() else 'No response'}"
             )
             raise
 
-    def analyze_pdf_file(self, pdf_path: str, verbose: bool = True) -> List[Dict]:
-        """Analyze a PDF file for virtual ward mentions."""
-        if verbose:
-            logger.info(f"\nAnalyzing: {pdf_path}")
-
+    def analyze_pdf_file(self, pdf_path: str) -> List[Dict]:
+        """Analyze a PDF file for healthcare terms."""
         try:
-            # Extract text from PDF
             text = self.extract_text_from_pdf(pdf_path)
-
-            # Split into chunks to handle large documents
             chunks = self.chunk_text(text)
 
-            # Analyze each chunk
             all_results = []
-            for i, chunk in enumerate(chunks, 1):
-                if verbose:
-                    logger.info(f"Processing chunk {i} of {len(chunks)}...")
+            for chunk in chunks:
                 results = self.analyze_text_chunk(chunk)
                 all_results.extend(results)
 
             return all_results
         except Exception as e:
-            logger.error(f"Error processing {pdf_path}: {str(e)}")
+            logger.error(f"PDF analysis failed: {e}")
             raise
 
     def extract_metadata(self, text: str) -> Dict[str, str]:
         """Extract metadata from PDF text using Gemini."""
         logger.info("Extracting metadata using Gemini API")
-        prompt = """Extract the following metadata from this document text:
-        1. Document Date: Find the most likely meeting or document date (in YYYY-MM-DD format if possible)
-        2. Document Title: Extract the main title of the document
-        3. Organization Name: Identify the NHS organization or trust name
 
-        Respond in this EXACT format (including the triple backticks):
-        ```date
-        YYYY-MM-DD or any found date format
-        ```
-        ```title
-        DOCUMENT TITLE
-        ```
-        ```organization
-        ORGANIZATION NAME
-        ```
+        # Define metadata fields and their markers
+        METADATA_FIELDS = {
+            "date": "```date\n",
+            "title": "```title\n",
+            "organization": "```organization\n",
+        }
 
-        If any field cannot be found, use "Unknown" as the value.
-
-        Text to analyze (first 2000 characters):
-        {text}"""
+        # Default metadata values
+        metadata = {field: "Unknown" for field in METADATA_FIELDS}
 
         try:
             # Only use first 2000 characters for metadata extraction
             text_sample = text[:2000]
             model = genai.GenerativeModel("gemini-2.0-flash")
-            response = model.generate_content(prompt.format(text=text_sample))
+            response = self._model.generate_content(get_metadata_prompt(text_sample))
             content = response.text.strip()
 
-            metadata = {
-                "date": "Unknown",
-                "title": "Unknown",
-                "organization": "Unknown",
-            }
-
-            # Parse the response
-            if "```date" in content:
-                date_start = content.find("```date\n") + 8
-                date_end = content.find("```", date_start)
-                metadata["date"] = content[date_start:date_end].strip()
-
-            if "```title" in content:
-                title_start = content.find("```title\n") + 9
-                title_end = content.find("```", title_start)
-                metadata["title"] = content[title_start:title_end].strip()
-
-            if "```organization" in content:
-                org_start = content.find("```organization\n") + 15
-                org_end = content.find("```", org_start)
-                metadata["organization"] = content[org_start:org_end].strip()
+            # Extract each metadata field
+            for field, marker in METADATA_FIELDS.items():
+                if marker in content:
+                    # Find the content between the marker and the next triple backticks
+                    start = content.find(marker) + len(marker)
+                    end = content.find("```", start)
+                    if end != -1:  # Only update if we found the closing backticks
+                        metadata[field] = content[start:end].strip()
 
             return metadata
 
         except Exception as e:
             logger.error(f"Error extracting metadata: {str(e)}")
-            return {"date": "Unknown", "title": "Unknown", "organization": "Unknown"}
+            return metadata
 
-    def analyze_pdf_url(self, url: str, verbose: bool = True) -> Dict[str, Any]:
-        """
-        Download and analyze a PDF from a URL.
-
-        Args:
-            url: URL of the PDF to analyze or path to local PDF file
-            verbose: Whether to print progress messages
-
-        Returns:
-            Dictionary with analysis results and metadata
-        """
+    def analyze_pdf_url(self, url: str) -> Dict[str, Any]:
+        """Download and analyze a PDF from a URL."""
         try:
-            # Check if this is a local file
             if os.path.exists(url):
-                logger.info(f"Analyzing local PDF file: {url}")
+                logger.debug(f"Analyzing local file: {url}")
                 text = self.extract_text_from_pdf(url)
-                mentions = self.analyze_pdf_file(url, verbose=verbose)
+                mentions = self.analyze_pdf_file(url)
             else:
-                # Remote URL – check cache first
                 cached = self._download_cache.get(url)
                 if cached and os.path.exists(cached.get("path", "")):
-                    if verbose:
-                        logger.info("Using cached PDF download")
+                    logger.debug("Using cached PDF")
                     temp_path = cached["path"]
                 else:
-                    if verbose:
-                        logger.info(f"Downloading PDF from {url}")
+                    logger.debug(f"Downloading: {url}")
+                    temp_path = self._download_pdf(url)
 
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                    }
-                    response = requests.get(
-                        url, headers=headers, stream=True, verify=False
-                    )
-                    response.raise_for_status()
-
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".pdf", delete=False
-                    ) as tmp:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                tmp.write(chunk)
-                        temp_path = tmp.name
-
-                    # Put into cache for possible later reuse
-                    self._download_cache[url] = {"path": temp_path}
-
-                # Extract text and analyze the PDF
                 text = self.extract_text_from_pdf(temp_path)
-                mentions = self.analyze_pdf_file(temp_path, verbose=verbose)
+                mentions = self.analyze_pdf_file(temp_path)
 
-                # Note: we deliberately do NOT delete temp_path here if it is in
-                # the cache, so that the same file can be reused by later calls
-                # during this run.  Cleanup can be handled at process exit or
-                # by an explicit cache‑clearing routine if needed.
-
-            # Extract metadata
             metadata = self.extract_metadata(text)
-
-            # Process found terms
-            if mentions:
-                # Group mentions by term
-                terms_found = set()
-                terms_data = {}
-                for mention in mentions:
-                    term = mention.get("term")
-                    if term:
-                        terms_found.add(term)
-                        if term not in terms_data:
-                            terms_data[term] = {
-                                "quotes": [mention.get("quotes", "")],
-                                "summaries": [mention.get("summary", "")],
-                            }
-                        else:
-                            terms_data[term]["quotes"].append(mention.get("quotes", ""))
-                            terms_data[term]["summaries"].append(
-                                mention.get("summary", "")
-                            )
-
-                result = {
-                    "success": True,
-                    "terms_found": list(terms_found),
-                    "terms_count": len(terms_found),
-                    "has_relevant_terms": len(terms_found) > 0,
-                    "terms_data": terms_data,
-                    "detailed_mentions": mentions,
-                    "date": metadata["date"],
-                    "title": metadata["title"],
-                    "organization": metadata["organization"],
-                }
-                logger.info(f"Found {len(terms_found)} relevant terms")
-            else:
-                result = {
-                    "success": True,
-                    "terms_found": [],
-                    "terms_count": 0,
-                    "has_relevant_terms": False,
-                    "terms_data": {},
-                    "detailed_mentions": [],
-                    "date": metadata["date"],
-                    "title": metadata["title"],
-                    "organization": metadata["organization"],
-                }
-                logger.info("No relevant terms found")
-
-            return result
+            return self._build_analysis_result(mentions, metadata)
 
         except Exception as e:
-            logger.error(f"Error analyzing PDF: {str(e)}")
+            logger.error(f"PDF URL analysis failed: {e}")
+            return self._build_empty_result()
+
+    def _download_pdf(self, url: str) -> str:
+        """Download a PDF and return its local path."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = requests.get(url, headers=headers, stream=True, verify=False)
+        response.raise_for_status()
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp.write(chunk)
+            temp_path = tmp.name
+
+        self._download_cache[url] = {"path": temp_path}
+        return temp_path
+
+    def _build_analysis_result(
+        self, mentions: List[Dict], metadata: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Build a standardized analysis result dictionary."""
+        if not mentions:
             return {
-                "success": False,
+                "success": True,
                 "terms_found": [],
                 "terms_count": 0,
                 "has_relevant_terms": False,
                 "terms_data": {},
                 "detailed_mentions": [],
-                "date": "Unknown",
-                "title": "Unknown",
-                "organization": "Unknown",
+                **metadata,
             }
+
+        terms_found = set()
+        terms_data = {}
+        for mention in mentions:
+            term = mention.get("term")
+            if term:
+                terms_found.add(term)
+                if term not in terms_data:
+                    terms_data[term] = {
+                        "quotes": [mention.get("quotes", "")],
+                        "summaries": [mention.get("summary", "")],
+                    }
+                else:
+                    terms_data[term]["quotes"].append(mention.get("quotes", ""))
+                    terms_data[term]["summaries"].append(mention.get("summary", ""))
+
+        return {
+            "success": True,
+            "terms_found": list(terms_found),
+            "terms_count": len(terms_found),
+            "has_relevant_terms": True,
+            "terms_data": terms_data,
+            "detailed_mentions": mentions,
+            **metadata,
+        }
+
+    def _build_empty_result(self) -> Dict[str, Any]:
+        """Return an empty result structure for error cases."""
+        return {
+            "success": False,
+            "terms_found": [],
+            "terms_count": 0,
+            "has_relevant_terms": False,
+            "terms_data": {},
+            "detailed_mentions": [],
+            "date": "Unknown",
+            "title": "Unknown",
+            "organization": "Unknown",
+        }
 
     def analyze_pdf_directory(
         self, directory_path: str, verbose: bool = True
@@ -569,10 +456,9 @@ Text to analyze:
                 page_text = reader.pages[i].extract_text() or ""
                 text += page_text + " "
 
-            prompt = """Extract ONLY the document date from this text.\nLook for meeting dates, publication dates, or any dates that appear to be when the document was created.\n\nReturn the date in YYYY-MM-DD format if possible, or any clear date format you find.\nIf multiple dates are found, choose the one most likely to be the document date.\n\nRespond with ONLY the date and nothing else. If no date is found, respond with \"Unknown\".\n\nText:\n{text}"""
+            prompt = get_date_extraction_prompt(text[:3000])
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt.format(text=text[:3000]))
+            response = self._date_model.generate_content(prompt)
             date = response.text.strip()
 
             logger.info(f"Extracted date: {date}")
@@ -598,29 +484,14 @@ Text to analyze:
 
     def is_from_2024_or_later(self, date_str: str) -> bool:
         """Check if a paper's date is from 2024 or later"""
-        if date_str == "Unknown" or not date_str:
+        if not date_str or date_str == "Unknown":
             return False
 
-        # Try to extract year from various date formats
         try:
-            # Handle ISO format (YYYY-MM-DD)
-            if "-" in date_str and len(date_str) >= 4:
-                year = int(date_str.split("-")[0])
-                return year >= 2024
-
-            # Handle other formats that have year at the beginning
-            elif len(date_str) >= 4 and date_str[:4].isdigit():
-                year = int(date_str[:4])
-                return year >= 2024
-
-            # Handle formats with year at the end (e.g., "Jan 2024" or "January 2024")
-            elif " " in date_str and date_str.split()[-1].isdigit():
-                year = int(date_str.split()[-1])
-                return year >= 2024
-
-            # Default to false if we can't determine the date
-            else:
-                return False
+            # Extract all numbers from the string that could be years (4 digits)
+            years = [int(match) for match in re.findall(r"\b\d{4}\b", date_str)]
+            # Return True if any year is >= 2024, False otherwise
+            return any(year >= 2024 for year in years)
         except:
             return False
 
@@ -650,6 +521,31 @@ Text to analyze:
         cleaned_text = re.sub(repeated_phrase_pattern, r"\1", cleaned_text)
 
         return cleaned_text
+
+    def _call_gemini(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 8_192,
+    ) -> str:
+        """Single place to call the Gemini model."""
+        response = self._model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": temperature,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": max_tokens,
+            },
+            safety_settings=[
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                }
+            ],
+        )
+        return response.text.strip()
 
 
 # CLI for standalone use

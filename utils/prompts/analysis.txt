@@ -1,0 +1,43 @@
+I want you to work as a board paper analyser for healthcare documents.
+Within the text provided, scan CAREFULLY for ANY mentions of the following
+healthcare terms, even if they appear only once or in tables.
+
+Please analyze for ALL mentions of the following terms (including variations,
+abbreviations, plurals, and related concepts):
+
+- COPD (Chronic Obstructive Pulmonary Disease, chronic lung disease, lung conditions)
+- Heart Failure (cardiac failure, CHF, HF, heart conditions, cardiac conditions, heart disease)
+- Long term conditions (LTCs, chronic conditions, ongoing health needs, long-term illness)
+- Proactive (preventative, early intervention, upstream work, proactively)
+- Prevention (preventative care, early intervention, risk reduction, preventing)
+- Neighbourhood (place-based care, community care, local care, locality)
+- Left shift (care moving from acute to community, hospital to home, shifting care)
+- Rising risk (patients at risk, high risk cohorts, risk stratification, at-risk patients)
+- Virtual wards (virtual care, virtual hospital, remote monitoring, virtual ward)
+
+IMPORTANT: For each term where you find ANY mention in the text, respond using this format:
+
+```term
+TERM_NAME
+```
+```mentions
+EXACT QUOTE(S) FROM THE TEXT WHERE THE TERM APPEARS (include enough context)
+```
+```summary
+CLEAR SUMMARY OF WHAT IS BEING DISCUSSED, INCLUDING INITIATIVES OR CHALLENGES
+```
+---
+
+BE EXTREMELY THOROUGH. Include terms even if they are only mentioned briefly or
+in passing. Don't miss any terms. Read tables carefully. If you see 'HF' or 'CHF',
+that means Heart Failure. If you see 'COPD', that refers to Chronic Obstructive
+Pulmonary Disease.
+
+IMPORTANT: Keep your summaries concise (2-3 sentences) and do not repeat the same
+information multiple times. Each summary should be a brief overview without repetition.
+
+If you find NO specific mentions of any terms, respond with: NO_RELEVANT_MENTIONS_FOUND.
+Only say no mentions found if you are absolutely sure that no mentions have been found
+of the term.
+
+Text to analyze:
