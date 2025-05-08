@@ -286,8 +286,95 @@
                                 return;
                             }
                             
-                            const termSummaries = termData.summaries ? termData.summaries.join(' ') : 'No summary available';
-                            const termQuotes = termData.quotes ? termData.quotes.join('\n\n') : 'No quotes available';
+                            let summariesHtml =
+                                '<p class="text-muted">No summary available for this term.</p>';
+                            let headlineSeq = 0;              // sequential counter per term
+
+                            if (
+                              termData.summaries &&
+                              termData.summaries.length > 0 &&
+                              termData.summaries.some(s => s && s.trim() !== '')
+                            ) {
+                              summariesHtml = '';
+
+                              termData.summaries.forEach((summaryBlockString, blockIndex) => {
+                                if (!summaryBlockString || !summaryBlockString.trim()) return;
+
+                                const reportSections = summaryBlockString.split(/\n(?=\*\*Headline \d+:)/);
+
+                                reportSections.forEach(sectionText => {
+                                  if (!sectionText || !sectionText.trim()) return;
+
+                                  // 1️⃣  headline line
+                                  const headlineMatch = sectionText.match(
+                                    /^\*\*Headline\s+(\d+):\*\*\s*([\s\S]*?)(?:\s*\*\*Summary\s+\1:\*\*)?/i
+                                  );
+                                  if (!headlineMatch) {
+                                    summariesHtml += rawBlock(sectionText, 'no headline found');
+                                    return;
+                                  }
+                                  const headlineContent = headlineMatch[2].trim();
+
+                                  // 2️⃣  detailed context
+                                  const dcMatch = sectionText.match(
+                                    /\*\*Detailed Context:\*\*\s*([\s\S]*?)(?:\*\s*\*\*Commercial Angle \(Doccla Opportunity\):\*\*|$)/i
+                                  );
+                                  const detailedContext = dcMatch ? dcMatch[1].trim() : '';
+
+                                  // 3️⃣  commercial angle
+                                  const caMatch = sectionText.match(
+                                    /\*\*Commercial Angle \(Doccla Opportunity\):\*\*\s*([\s\S]*)$/i
+                                  );
+                                  const commercialAngle = caMatch ? caMatch[1].trim() : '';
+
+                                  if (detailedContext && commercialAngle) {
+                                    headlineSeq += 1;
+                                    const headlineText =
+                                      headlineContent ||
+                                      detailedContext.split(/[.?!]/)[0].trim(); // fall-back 1st sentence
+
+                                    summariesHtml += `
+                                      <div class="summary-item" style="margin-bottom:1.5rem;line-height:1.6">
+                                        <p style="margin-bottom:.5rem"><strong>Headline ${headlineSeq}:</strong> ${headlineText}</p>
+                                        <p style="margin-bottom:.5rem"><strong>Detailed Context:</strong> ${detailedContext}</p>
+                                        <p><strong>Commercial Angle (Doccla Opportunity):</strong> ${commercialAngle}</p>
+                                      </div>`;
+                                  } else {
+                                    summariesHtml += rawBlock(sectionText, 'could not parse full section');
+                                  }
+                                });
+
+                                // separator between different summary-block strings
+                                if (
+                                  blockIndex < termData.summaries.length - 1 &&
+                                  summariesHtml.trim() !== ''
+                                ) {
+                                  summariesHtml +=
+                                    '<hr style="margin:1rem 0 1.5rem;border-top:1px solid #dee2e6">';
+                                }
+                              });
+
+                              // nothing parsed at all
+                              if (!summariesHtml.trim()) {
+                                summariesHtml = rawBlock(
+                                  termData.summaries.join('\n\n---------\n\n'),
+                                  'could not parse summary content from AI'
+                                );
+                              }
+                            }
+
+                            // helper for raw fallback
+                            function rawBlock(txt, msg) {
+                              return `
+                                <div class="summary-item" style="margin-bottom:1.5rem">
+                                  <p class="text-danger"><em>${msg}.</em></p>
+                                  <pre style="white-space:pre-wrap;word-break:break-all;font-size:.85em;background:#f8f9fa;border:1px dashed #ccc;padding:10px;border-radius:4px">${txt.trim()}</pre>
+                                </div>`;
+                            }
+                            
+                            const termQuotes = termData.quotes && termData.quotes.length > 0 && termData.quotes.some(q => q && q.trim() !== '') 
+                                ? termData.quotes.map(q=>q.trim()).filter(q=>q).join('\n\n') 
+                                : '<p class="text-muted">No quotes available for this term.</p>'; // Changed to P tag for consistency
                             
                             const accordionItem = document.createElement('div');
                             accordionItem.className = 'accordion-item mb-3 border';
@@ -302,9 +389,9 @@
                                      aria-labelledby="heading${index}" data-bs-parent="#termsAccordion">
                                     <div class="accordion-body bg-light">
                                         <h6 class="text-primary">Summary:</h6>
-                                        <p>${termSummaries}</p>
+                                        ${summariesHtml} <!-- This will now inject the structured HTML -->
                                         <h6 class="text-primary mt-3">Mentions:</h6>
-                                        <pre class="border p-3 bg-white small rounded" style="white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">${termQuotes}</pre>
+                                        <div class="border p-3 bg-white small rounded" style="white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">${termQuotes}</div> <!-- Changed pre to div for p tag -->
                                     </div>
                                 </div>
                             `;
