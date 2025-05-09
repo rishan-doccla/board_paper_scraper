@@ -111,6 +111,7 @@ class PDFAnalyzer:
 Role: Act as a specialized analyst AI, meticulously scanning healthcare documents (specifically NHS board papers).
 Core Task: Carefully read the provided text from an NHS board paper. Your primary goal is to identify all occurrences of the concepts listed below. Be extremely thorough – check main text, tables, figures, appendices, and footnotes.
 
+
 Target Concepts & Keywords:
 Scan for any mentions related to the following concepts. Include the specific keywords listed, as well as variations, abbreviations, plurals, and closely related phrasings:
 Concept: COPD
@@ -179,7 +180,7 @@ Text to analyze:
         
         try:
             # Use the original model
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.5-pro-preview-05-06')
             
             # Set generation config with longer timeout for complex documents
             generation_config = {
@@ -398,7 +399,36 @@ Text to analyze:
             
             # Extract metadata
             metadata = self.extract_metadata(text)
-            
+
+            # --------------------------------------------------
+            # NEW: Generate organisation priorities summary once per PDF
+            # --------------------------------------------------
+            priorities_summary = ""
+            try:
+                summary_prompt = (
+                    "Provide a comprehensive (500-700 words) analysis of the key strategic goals, organisational priorities, "
+                    "and planned initiatives described in this NHS board paper. Your analysis should include:\n\n"
+                    "1. Main strategic priorities and objectives\n"
+                    "2. Key challenges and risks the organization is facing\n"
+                    "3. Specific planned initiatives or projects\n"
+                    "4. Financial priorities and resource allocations\n"
+                    "5. Goals related to healthcare quality, patient experience, and performance targets\n\n"
+                    "Base the analysis solely on the content provided and include specific details from the document. "
+                    "Organize your response in clear paragraphs with appropriate transitions, but don't use headings or bullet points. "
+                    "Keep the language clear, direct, and professional. "
+                    "If certain areas aren't mentioned in the document, focus on what is available rather than making assumptions.\n\n"
+                    "Text:\n{text}"
+                )
+                # Use a more capable model for more detailed analysis
+                summary_model = genai.GenerativeModel('gemini-2.0-flash')
+                summary_response = summary_model.generate_content(
+                    summary_prompt.format(text=text[:32000])  # Increase text limit to capture more content
+                )
+                priorities_summary = self.clean_repetitive_text(summary_response.text.strip())
+            except Exception as e:
+                logger.error(f"Error generating priorities summary: {str(e)}")
+                priorities_summary = "Summary unavailable."
+
             # Process found terms
             if mentions:
                 # Group mentions by term
@@ -426,7 +456,8 @@ Text to analyze:
                     "detailed_mentions": mentions,
                     "date": metadata['date'],
                     "title": metadata['title'],
-                    "organization": metadata['organization']
+                    "organization": metadata['organization'],
+                    "priorities_summary": priorities_summary
                 }
                 logger.info(f"Found {len(terms_found)} relevant terms")
             else:
@@ -439,7 +470,8 @@ Text to analyze:
                     "detailed_mentions": [],
                     "date": metadata['date'],
                     "title": metadata['title'],
-                    "organization": metadata['organization']
+                    "organization": metadata['organization'],
+                    "priorities_summary": priorities_summary
                 }
                 logger.info("No relevant terms found")
                 
@@ -456,7 +488,8 @@ Text to analyze:
                 "detailed_mentions": [],
                 "date": "Unknown",
                 "title": "Unknown",
-                "organization": "Unknown"
+                "organization": "Unknown",
+                "priorities_summary": "Summary unavailable."
             }
     
     def analyze_pdf_directory(self, directory_path: str, verbose: bool = True) -> Dict[str, List[Dict]]:
@@ -508,7 +541,8 @@ Text to analyze:
                     "detailed_mentions": [],
                     "date": "Unknown",
                     "title": "Unknown",
-                    "organization": "Unknown"
+                    "organization": "Unknown",
+                    "priorities_summary": "Summary unavailable."
                 })
         
         return results
@@ -566,7 +600,7 @@ Text to analyze:
             Text:
             {text}"""
             
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             response = model.generate_content(prompt.format(text=text[:3000]))  # First 3000 chars should be enough
             date = response.text.strip()
             

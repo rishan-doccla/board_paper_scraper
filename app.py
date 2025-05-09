@@ -65,7 +65,8 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
             "has_relevant_terms": False,
             "terms_found": [],
             "terms_count": 0,
-            "terms_data": {}
+            "terms_data": {},
+            "priorities_summary": ""
         }
     
     try:
@@ -115,7 +116,8 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
             "has_relevant_terms": len(valid_terms) > 0,
             "terms_found": valid_terms,
             "terms_count": len(valid_terms),
-            "terms_data": clean_terms_data
+            "terms_data": clean_terms_data,
+            "priorities_summary": results.get("priorities_summary", "")
         }
     except Exception as e:
         error_msg = f"Error analyzing PDF {paper['url']}: {str(e)}"
@@ -124,7 +126,8 @@ def process_paper_analysis(paper, analyzer, scrape_only=False):
             "has_relevant_terms": False,
             "terms_found": [],
             "terms_count": 0,
-            "terms_data": {}
+            "terms_data": {},
+            "priorities_summary": ""
         }
 
 def create_paper_dict(paper, org_url, existing_papers):
@@ -149,7 +152,8 @@ def create_paper_dict(paper, org_url, existing_papers):
         "terms_data": {},
         "is_new": (paper["url"], paper.get("title", "Unknown")) not in existing_papers,
         "found_date": datetime.datetime.now().isoformat(),
-        "sort_date": paper.get("date", "9999-99") if paper.get("date") != "Unknown" else "9999-99"
+        "sort_date": paper.get("date", "9999-99") if paper.get("date") != "Unknown" else "9999-99",
+        "priorities_summary": ""
     }
 
 def update_and_save_results(papers):
@@ -184,7 +188,8 @@ async def process_organization(url, existing_papers, scrape_only=False):
                     "has_relevant_terms": analysis_results["has_relevant_terms"],
                     "terms_found": analysis_results["terms_found"],
                     "terms_count": analysis_results["terms_count"],
-                    "terms_data": analysis_results["terms_data"]
+                    "terms_data": analysis_results["terms_data"],
+                    "priorities_summary": analysis_results["priorities_summary"]
                 })
                 org_papers.append(paper_dict)
             else:
@@ -340,6 +345,7 @@ def analyze_papers():
                     "terms_data": paper.get("terms_data", {}),
                     "date": paper.get("date", "Unknown"),
                     "organization": paper.get("organization", "Unknown"),
+                    "priorities_summary": paper.get("priorities_summary", ""),
                     "analysis_source": "cached"
                 })
                 print(f"Using cached analysis for {url}")
@@ -367,6 +373,7 @@ def analyze_papers():
                         "terms_data": analysis["terms_data"],
                         "date": analysis.get("date", "Unknown"),
                         "organization": analysis.get("organization", "Unknown"),
+                        "priorities_summary": analysis.get("priorities_summary", ""),
                         "analysis_source": "new"
                     }
                     results.append(result)
@@ -385,6 +392,7 @@ def analyze_papers():
                         "terms_data": {},
                         "date": "Unknown",
                         "organization": current_papers.get(url, {}).get("organization", "Unknown"),
+                        "priorities_summary": "",
                         "analysis_source": "error"
                     })
         
@@ -445,6 +453,10 @@ def update_paper_analysis(url, analysis):
                 
             if analysis.get("organization") and analysis["organization"] != "Unknown":
                 paper["organization"] = analysis["organization"]
+
+            # NEW: update priorities summary if provided
+            if analysis.get("priorities_summary"):
+                paper["priorities_summary"] = analysis["priorities_summary"]
             break
 
 @app.route('/test-analysis')

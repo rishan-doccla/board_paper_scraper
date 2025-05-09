@@ -113,6 +113,7 @@
                                             <th>Organization</th>
                                             <th>Date</th>
                                             <th>Terms</th>
+                                            <th>Organisation Priorities</th>
                                             <th>Summary</th>
                                             <th>Action</th>
                                         </tr>
@@ -133,6 +134,19 @@
                                                             {% if paper.terms_found|length > 2 %}
                                                                 <span class="badge bg-secondary">+{{ paper.terms_found|length - 2 }}</span>
                                                             {% endif %}
+                                                        {% else %}
+                                                            <span class="badge bg-secondary">None</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if paper.priorities_summary %}
+                                                            <button type="button" class="btn btn-sm btn-warning"
+                                                                    data-bs-toggle="modal"
+                                                                    data-bs-target="#prioritiesModal"
+                                                                    data-priorities='{{ paper.priorities_summary|tojson|safe }}'
+                                                                    data-title="{{ paper.title if paper.title != 'Unknown' else paper.filename }}">
+                                                                View Priorities
+                                                            </button>
                                                         {% else %}
                                                             <span class="badge bg-secondary">None</span>
                                                         {% endif %}
@@ -219,6 +233,25 @@
                     <div id="modalTermsContent" class="mt-2">
                         <!-- Terms content will be inserted here dynamically -->
                     </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Organisation Priorities Modal -->
+    <div class="modal fade" id="prioritiesModal" tabindex="-1" aria-labelledby="prioritiesModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="prioritiesModalLabel">Organisation Priorities</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 id="modalPrioritiesPaperTitle" class="mb-3"></h6>
+                    <div id="modalPrioritiesContent" class="p-3 bg-light rounded" style="white-space: pre-wrap; line-height: 1.6; font-size: 1.05rem; text-align: justify;"></div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -418,6 +451,29 @@
                     }
                 });
             }
+
+            // Handle priorities modal
+            const prioritiesModal = document.getElementById('prioritiesModal');
+            if (prioritiesModal) {
+                prioritiesModal.addEventListener('show.bs.modal', function (event) {
+                    const button = event.relatedTarget;
+                    const prioritiesJson = button.getAttribute('data-priorities');
+                    const title = button.getAttribute('data-title');
+
+                    const modalTitle = this.querySelector('#modalPrioritiesPaperTitle');
+                    const modalContent = this.querySelector('#modalPrioritiesContent');
+
+                    modalTitle.textContent = title;
+
+                    try {
+                        const summary = JSON.parse(prioritiesJson || '""');
+                        modalContent.textContent = summary || 'No priorities summary available.';
+                    } catch (err) {
+                        console.error('Error displaying priorities summary:', err);
+                        modalContent.innerHTML = `<div class="alert alert-danger">Error displaying summary: ${err.message}</div>`;
+                    }
+                });
+            }
         });
         
         document.getElementById('runCrawlerBtn').addEventListener('click', async () => {
@@ -535,32 +591,6 @@
                 loading.style.display = 'none';
             }
         });
-
-        // Load results when page loads
-        loadResults();
-
-        // Add Reset Papers button handler
-        document.getElementById('resetPapersBtn').addEventListener('click', async () => {
-            if (!confirm('Warning: This will erase all existing papers. Are you sure you want to proceed?')) {
-                return;
-            }
-            try {
-                const response = await fetch('/reset-existing-papers', {
-                    method: 'POST'
-                });
-                const data = await response.json();
-                alert(data.message || 'Reset completed');
-                location.reload(); // Reload page to reflect the empty results
-            } catch (error) {
-                alert('Error resetting papers: ' + error.message);
-            }
-        });
-
-        // Add handler for the new detailed export button
-        document.getElementById('exportDetailedResultsBtn').addEventListener('click', () => {
-            // Redirect browser to the new detailed export endpoint
-            window.location.href = '/export-detailed-results';
-        });
     </script>
 </body>
-</html> 
+</html>
