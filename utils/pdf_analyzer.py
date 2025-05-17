@@ -113,38 +113,75 @@ class PDFAnalyzer:
     def analyze_text_chunk(self, text: str) -> List[Dict]:
         """Analyze a chunk of text for multiple healthcare terms."""
         logger.info("Analyzing text chunk with Gemini API")
-        prompt = """I want you to work as a board paper analyser for healthcare documents. Within the text provided, scan CAREFULLY for ANY mentions of the following healthcare terms, even if they appear only once or in tables.
+        prompt = """
 
-Please analyze for ALL mentions of the following terms (including variations, abbreviations, plurals, and related concepts):
+        Objective: Analyze an NHS board paper to identify and summarize mentions of specific healthcare concepts relevant to Doccla's commercial interests.
+Role: Act as a specialized analyst AI, meticulously scanning healthcare documents (specifically NHS board papers).
+Core Task: Carefully read the provided text from an NHS board paper. Your primary goal is to identify all occurrences of the concepts listed below. Be extremely thorough – check main text, tables, figures, appendices, and footnotes.
 
-- COPD (Chronic Obstructive Pulmonary Disease, chronic lung disease, lung conditions)
-- Heart Failure (cardiac failure, CHF, HF, heart conditions, cardiac conditions, heart disease)
-- Long term conditions (LTCs, chronic conditions, ongoing health needs, long-term illness)
-- Proactive (preventative, early intervention, upstream work, proactively)
-- Prevention (preventative care, early intervention, risk reduction, preventing)
-- Neighbourhood (place-based care, community care, local care, locality)
-- Left shift (care moving from acute to community, hospital to home, shifting care)
-- Rising risk (patients at risk, high risk cohorts, risk stratification, at-risk patients)
-- Virtual wards (virtual care, virtual hospital, remote monitoring, virtual ward)
 
-IMPORTANT: For each term where you find ANY mention in the text, respond using this format:
+Target Concepts & Keywords:
+Scan for any mentions related to the following concepts. Include the specific keywords listed, as well as variations, abbreviations, plurals, and closely related phrasings:
+Concept: COPD
+Keywords/Variations: Chronic Obstructive Pulmonary Disease, COPD, chronic lung disease, lung conditions (in the context of chronic illness).
+Concept: Heart Failure
+Keywords/Variations: Heart Failure, cardiac failure, CHF, HF, heart conditions, cardiac conditions, heart disease (specifically referring to failure/chronic conditions).
+Concept: Long-Term Conditions
+Keywords/Variations: Long term conditions, LTCs, chronic conditions, ongoing health needs, long-term illness, chronic disease management.
+Concept: Proactive Care
+Keywords/Variations: Proactive, preventative, early intervention, upstream work, proactively, anticipatory care.
+Concept: Prevention
+Keywords/Variations: Prevention, preventative care, preventing illness, risk reduction, health promotion (in the context of preventing specific conditions or exacerbations).
+Concept: Neighbourhood/Place-Based Care
+Keywords/Variations: Neighbourhood, place-based care, community care, local care, locality teams, integrated neighbourhood teams, care closer to home (as a location/model).
+Concept: Care Shift (Left Shift)
+Keywords/Variations: Shift left, demand shift, upstream, moving care, care pathway redesign (in context of shifting from acute), reducing hospital admissions, community shift.
+Concept: Identifying/Managing Patients at Risk
+Keywords/Variations: Rising risk, patients at risk, high risk cohorts, risk stratification, identifying risk, vulnerable populations, at-risk patients.
+Concept: Virtual Wards / Remote Monitoring
+Keywords/Variations: Virtual wards, virtual care, virtual hospital, remote monitoring, telehealth (in context of ward-level care), hospital at home (tech-enabled), remote patient management.
+
+Output Format:
+
+For each Concept listed above where you find at least one mention in the text, respond using this EXACT format:
 
 ```term
-TERM_NAME
+CONCEPT_NAME (e.g., Heart Failure)
 ```
 ```mentions
-EXACT QUOTE(S) FROM THE TEXT WHERE THE TERM APPEARS (include enough context)
+"Exact quote 1... [include enough surrounding text for context]." [Reference if possible, e.g., "Page 5"]
+"Exact quote 2... [if multiple distinct mentions, list relevant ones]." [Reference if possible, e.g., "Table 3, Page 10"]
+[Add more quotes as necessary]
 ```
 ```summary
-CLEAR SUMMARY OF WHAT IS BEING DISCUSSED, INCLUDING INITIATIVES OR CHALLENGES
+**Headline 1:** [A concise sentence summarizing the first key status, development, challenge, or strategic point identified from the mentions.]
+**Summary 1:**
+    *   **Detailed Context:** [Elaborate on **Headline 1** with 3-5 sentences, providing supporting details *specifically related to this headline* from the text. Include relevant data points, initiatives, challenges, strategic importance, or decisions mentioned.]
+    *   **Commercial Angle (Doccla Opportunity):** [Based *only* on the information related to **Headline 1**, suggest a potential actionable insight or opportunity for Doccla's commercial team in 1-3 sentences. How could Doccla leverage the specific information related to this headline for relevant outreach or positioning?]
+
+**Headline 2:** [A concise sentence summarizing the second distinct key status, development, challenge, or strategic point identified from the mentions, *if applicable and distinct from Headline 1*.]
+**Summary 2:**
+    *   **Detailed Context:** [Elaborate on **Headline 2** with 3-5 sentences, providing supporting details *specifically related to this headline* from the text.]
+    *   **Commercial Angle (Doccla Opportunity):** [Based *only* on the information related to **Headline 2**, suggest a potential actionable insight or opportunity for Doccla's commercial team in 1-3 sentences.]
+
+**Headline 3:** [A concise sentence summarizing the third distinct key status, development, challenge, or strategic point identified from the mentions, *if applicable and distinct from Headlines 1 & 2*.]
+**Summary 3:**
+    *   **Detailed Context:** [Elaborate on **Headline 3** with 3-5 sentences, providing supporting details *specifically related to this headline* from the text.]
+    *   **Commercial Angle (Doccla Opportunity):** [Based *only* on the information related to **Headline 3**, suggest a potential actionable insight or opportunity for Doccla's commercial team in 1-3 sentences.]
+
+[Only include Headline/Summary blocks for the distinct points identified, up to a maximum of three.]
 ```
----
 
 BE EXTREMELY THOROUGH. Include terms even if they are only mentioned briefly or in passing. Don't miss any terms. Read tables carefully. If you see 'HF' or 'CHF', that means Heart Failure. If you see 'COPD', that refers to Chronic Obstructive Pulmonary Disease.
-
-IMPORTANT: Keep your summaries concise (2-3 sentences) and do not repeat the same information multiple times. Each summary should be a brief overview without repetition.
-
-If you find NO specific mentions of any terms, respond with: NO_RELEVANT_MENTIONS_FOUND
+IMPORTANT:
+Headline Findings: Extract up to three distinct main points for the first part of the summary if the text supports it.
+Summary Structure: Strictly follow the 3-point structure (Headline Findings, Detailed Context, Commercial Angle) for every summary.
+Summary Content: Summaries should synthesize the information from the mentions, supporting the headline findings with relevant details. Aim for a slightly more comprehensive summary than before, but still focused.
+Commercial Angle: This MUST be directly linked to the specific information presented in the document for that concept (as highlighted in the headlines and context). Avoid generic statements.
+Repetition: Avoid repeating the exact same information across different concept summaries.
+Stick to the Text: Extract information only from the provided text. Do not infer external knowledge or make assumptions.
+No Mentions: If none of the target concepts are found anywhere in the document, respond ONLY with: NO_RELEVANT_MENTIONS_FOUND
+One Entry Per Concept: Only provide one output block (term, mentions, summary) per target concept, even if mentioned multiple times. Consolidate all findings for that concept into its single entry.
 
 Text to analyze:
 {text}"""
@@ -155,7 +192,7 @@ Text to analyze:
 
             # Set generation config with longer timeout for complex documents
             generation_config = {
-                "temperature": 0.2,  # Lower temperature for more focused extraction
+                "temperature": 0.0,  # Lower temperature for more focused extraction
                 "top_p": 0.95,
                 "top_k": 40,
                 "max_output_tokens": 8192,  # Allow longer responses
@@ -392,6 +429,39 @@ Text to analyze:
             # Extract metadata
             metadata = self.extract_metadata(text)
 
+            # --------------------------------------------------
+            # NEW: Generate organisation priorities summary once per PDF
+            # --------------------------------------------------
+            priorities_summary = ""
+            try:
+                summary_prompt = (
+                    "Provide a comprehensive (500-700 words) analysis of the key strategic goals, organisational priorities, "
+                    "and planned initiatives described in this NHS board paper. Your analysis should include:\n\n"
+                    "1. Main strategic priorities and objectives\n"
+                    "2. Key challenges and risks the organization is facing\n"
+                    "3. Specific planned initiatives or projects\n"
+                    "4. Financial priorities and resource allocations\n"
+                    "5. Goals related to healthcare quality, patient experience, and performance targets\n\n"
+                    "Base the analysis solely on the content provided and include specific details from the document. "
+                    "Organize your response in clear paragraphs with appropriate transitions, but don't use headings or bullet points. "
+                    "Keep the language clear, direct, and professional. "
+                    "If certain areas aren't mentioned in the document, focus on what is available rather than making assumptions.\n\n"
+                    "Text:\n{text}"
+                )
+                # Use a more capable model for more detailed analysis
+                summary_model = genai.GenerativeModel("gemini-2.0-flash")
+                summary_response = summary_model.generate_content(
+                    summary_prompt.format(
+                        text=text[:32000]
+                    )  # Increase text limit to capture more content
+                )
+                priorities_summary = self.clean_repetitive_text(
+                    summary_response.text.strip()
+                )
+            except Exception as e:
+                logger.error(f"Error generating priorities summary: {str(e)}")
+                priorities_summary = "Summary unavailable."
+
             # Process found terms
             if mentions:
                 # Group mentions by term
@@ -422,6 +492,7 @@ Text to analyze:
                     "date": metadata["date"],
                     "title": metadata["title"],
                     "organization": metadata["organization"],
+                    "priorities_summary": priorities_summary,
                 }
                 logger.info(f"Found {len(terms_found)} relevant terms")
             else:
@@ -435,6 +506,7 @@ Text to analyze:
                     "date": metadata["date"],
                     "title": metadata["title"],
                     "organization": metadata["organization"],
+                    "priorities_summary": priorities_summary,
                 }
                 logger.info("No relevant terms found")
 
@@ -452,6 +524,7 @@ Text to analyze:
                 "date": "Unknown",
                 "title": "Unknown",
                 "organization": "Unknown",
+                "priorities_summary": "Summary unavailable.",
             }
 
     def analyze_pdf_directory(
@@ -511,6 +584,7 @@ Text to analyze:
                         "date": "Unknown",
                         "title": "Unknown",
                         "organization": "Unknown",
+                        "priorities_summary": "Summary unavailable.",
                     }
                 )
 
@@ -566,13 +640,28 @@ Text to analyze:
             reader = PdfReader(pdf_path)
             text = ""
             for i in range(min(2, len(reader.pages))):
-                page_text = reader.pages[i].extract_text() or ""
-                text += page_text + " "
+                text += reader.pages[i].extract_text() + " "
 
-            prompt = """Extract ONLY the document date from this text.\nLook for meeting dates, publication dates, or any dates that appear to be when the document was created.\n\nReturn the date in YYYY-MM-DD format if possible, or any clear date format you find.\nIf multiple dates are found, choose the one most likely to be the document date.\n\nRespond with ONLY the date and nothing else. If no date is found, respond with \"Unknown\".\n\nText:\n{text}"""
+            # Clean up if temp file
+            if not os.path.exists(pdf_path_or_url):
+                os.unlink(pdf_path)
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt.format(text=text[:3000]))
+            # Extract date with a focused prompt
+            prompt = """Extract ONLY the document date from this text.
+            Look for meeting dates, publication dates, or any dates that appear to be when the document was created.
+
+            Return the date in YYYY-MM-DD format if possible, or any clear date format you find.
+            If multiple dates are found, choose the one most likely to be the document date.
+
+            Respond with ONLY the date and nothing else. If no date is found, respond with "Unknown".
+
+            Text:
+            {text}"""
+
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content(
+                prompt.format(text=text[:3000])
+            )  # First 3000 chars should be enough
             date = response.text.strip()
 
             logger.info(f"Extracted date: {date}")
