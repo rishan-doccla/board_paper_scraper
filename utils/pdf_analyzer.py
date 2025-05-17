@@ -180,7 +180,7 @@ Text to analyze:
         
         try:
             # Use the original model
-            model = genai.GenerativeModel('gemini-2.5-pro-preview-05-06')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Set generation config with longer timeout for complex documents
             generation_config = {
