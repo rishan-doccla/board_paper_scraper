@@ -398,6 +398,7 @@ class PDFAnalyzer:
                         "date": "Unknown",
                         "title": "Unknown",
                         "organization": "Unknown",
+                        "priorities_summary": "Summary unavailable.",
                     }
                 )
 
@@ -453,8 +454,7 @@ class PDFAnalyzer:
             reader = PdfReader(pdf_path)
             text = ""
             for i in range(min(2, len(reader.pages))):
-                page_text = reader.pages[i].extract_text() or ""
-                text += page_text + " "
+                text += reader.pages[i].extract_text() + " "
 
             prompt = get_date_extraction_prompt(text[:3000])
 

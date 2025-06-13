@@ -113,6 +113,7 @@
                                             <th>Organization</th>
                                             <th>Date</th>
                                             <th>Terms</th>
+                                            <th>Organisation Priorities</th>
                                             <th>Summary</th>
                                             <th>Action</th>
                                         </tr>
@@ -133,6 +134,19 @@
                                                             {% if paper.terms_found|length > 2 %}
                                                                 <span class="badge bg-secondary">+{{ paper.terms_found|length - 2 }}</span>
                                                             {% endif %}
+                                                        {% else %}
+                                                            <span class="badge bg-secondary">None</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if paper.priorities_summary %}
+                                                            <button type="button" class="btn btn-sm btn-warning"
+                                                                    data-bs-toggle="modal"
+                                                                    data-bs-target="#prioritiesModal"
+                                                                    data-priorities='{{ paper.priorities_summary|tojson|safe }}'
+                                                                    data-title="{{ paper.title if paper.title != 'Unknown' else paper.filename }}">
+                                                                View Priorities
+                                                            </button>
                                                         {% else %}
                                                             <span class="badge bg-secondary">None</span>
                                                         {% endif %}
@@ -227,6 +241,25 @@
         </div>
     </div>
 
+    <!-- Organisation Priorities Modal -->
+    <div class="modal fade" id="prioritiesModal" tabindex="-1" aria-labelledby="prioritiesModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="prioritiesModalLabel">Organisation Priorities</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 id="modalPrioritiesPaperTitle" class="mb-3"></h6>
+                    <div id="modalPrioritiesContent" class="p-3 bg-light rounded" style="white-space: pre-wrap; line-height: 1.6; font-size: 1.05rem; text-align: justify;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script>
@@ -286,8 +319,95 @@
                                 return;
                             }
 
-                            const termSummaries = termData.summaries ? termData.summaries.join(' ') : 'No summary available';
-                            const termQuotes = termData.quotes ? termData.quotes.join('\n\n') : 'No quotes available';
+                            let summariesHtml =
+                                '<p class="text-muted">No summary available for this term.</p>';
+                            let headlineSeq = 0;              // sequential counter per term
+
+                            if (
+                              termData.summaries &&
+                              termData.summaries.length > 0 &&
+                              termData.summaries.some(s => s && s.trim() !== '')
+                            ) {
+                              summariesHtml = '';
+
+                              termData.summaries.forEach((summaryBlockString, blockIndex) => {
+                                if (!summaryBlockString || !summaryBlockString.trim()) return;
+
+                                const reportSections = summaryBlockString.split(/\n(?=\*\*Headline \d+:)/);
+
+                                reportSections.forEach(sectionText => {
+                                  if (!sectionText || !sectionText.trim()) return;
+
+                                  // 1️⃣  headline line
+                                  const headlineMatch = sectionText.match(
+                                    /^\*\*Headline\s+(\d+):\*\*\s*([\s\S]*?)(?:\s*\*\*Summary\s+\1:\*\*)?/i
+                                  );
+                                  if (!headlineMatch) {
+                                    summariesHtml += rawBlock(sectionText, 'no headline found');
+                                    return;
+                                  }
+                                  const headlineContent = headlineMatch[2].trim();
+
+                                  // 2️⃣  detailed context
+                                  const dcMatch = sectionText.match(
+                                    /\*\*Detailed Context:\*\*\s*([\s\S]*?)(?:\*\s*\*\*Commercial Angle \(Doccla Opportunity\):\*\*|$)/i
+                                  );
+                                  const detailedContext = dcMatch ? dcMatch[1].trim() : '';
+
+                                  // 3️⃣  commercial angle
+                                  const caMatch = sectionText.match(
+                                    /\*\*Commercial Angle \(Doccla Opportunity\):\*\*\s*([\s\S]*)$/i
+                                  );
+                                  const commercialAngle = caMatch ? caMatch[1].trim() : '';
+
+                                  if (detailedContext && commercialAngle) {
+                                    headlineSeq += 1;
+                                    const headlineText =
+                                      headlineContent ||
+                                      detailedContext.split(/[.?!]/)[0].trim(); // fall-back 1st sentence
+
+                                    summariesHtml += `
+                                      <div class="summary-item" style="margin-bottom:1.5rem;line-height:1.6">
+                                        <p style="margin-bottom:.5rem"><strong>Headline ${headlineSeq}:</strong> ${headlineText}</p>
+                                        <p style="margin-bottom:.5rem"><strong>Detailed Context:</strong> ${detailedContext}</p>
+                                        <p><strong>Commercial Angle (Doccla Opportunity):</strong> ${commercialAngle}</p>
+                                      </div>`;
+                                  } else {
+                                    summariesHtml += rawBlock(sectionText, 'could not parse full section');
+                                  }
+                                });
+
+                                // separator between different summary-block strings
+                                if (
+                                  blockIndex < termData.summaries.length - 1 &&
+                                  summariesHtml.trim() !== ''
+                                ) {
+                                  summariesHtml +=
+                                    '<hr style="margin:1rem 0 1.5rem;border-top:1px solid #dee2e6">';
+                                }
+                              });
+
+                              // nothing parsed at all
+                              if (!summariesHtml.trim()) {
+                                summariesHtml = rawBlock(
+                                  termData.summaries.join('\n\n---------\n\n'),
+                                  'could not parse summary content from AI'
+                                );
+                              }
+                            }
+
+                            // helper for raw fallback
+                            function rawBlock(txt, msg) {
+                              return `
+                                <div class="summary-item" style="margin-bottom:1.5rem">
+                                  <p class="text-danger"><em>${msg}.</em></p>
+                                  <pre style="white-space:pre-wrap;word-break:break-all;font-size:.85em;background:#f8f9fa;border:1px dashed #ccc;padding:10px;border-radius:4px">${txt.trim()}</pre>
+                                </div>`;
+                            }
+
+                            const termQuotes = termData.quotes && termData.quotes.length > 0 && termData.quotes.some(q => q && q.trim() !== '')
+                                ? termData.quotes.map(q=>q.trim()).filter(q=>q).join('\n\n')
+                                : '<p class="text-muted">No quotes available for this term.</p>'; // Changed to P tag for consistency
 
                             const accordionItem = document.createElement('div');
                             accordionItem.className = 'accordion-item mb-3 border';
@@ -302,9 +422,9 @@
                                      aria-labelledby="heading${index}" data-bs-parent="#termsAccordion">
                                     <div class="accordion-body bg-light">
                                         <h6 class="text-primary">Summary:</h6>
-                                        <p>${termSummaries}</p>
+                                        ${summariesHtml} <!-- This will now inject the structured HTML -->
                                         <h6 class="text-primary mt-3">Mentions:</h6>
-                                        <pre class="border p-3 bg-white small rounded" style="white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">${termQuotes}</pre>
+                                        <div class="border p-3 bg-white small rounded" style="white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">${termQuotes}</div> <!-- Changed pre to div for p tag -->
                                     </div>
                                 </div>
                             `;
@@ -328,6 +448,29 @@
                                 <pre>${termsDataJson}</pre>
                             </div>
                         `;
+                    }
+                });
+            }
+
+            // Handle priorities modal
+            const prioritiesModal = document.getElementById('prioritiesModal');
+            if (prioritiesModal) {
+                prioritiesModal.addEventListener('show.bs.modal', function (event) {
+                    const button = event.relatedTarget;
+                    const prioritiesJson = button.getAttribute('data-priorities');
+                    const title = button.getAttribute('data-title');
+
+                    const modalTitle = this.querySelector('#modalPrioritiesPaperTitle');
+                    const modalContent = this.querySelector('#modalPrioritiesContent');
+
+                    modalTitle.textContent = title;
+
+                    try {
+                        const summary = JSON.parse(prioritiesJson || '""');
+                        modalContent.textContent = summary || 'No priorities summary available.';
+                    } catch (err) {
+                        console.error('Error displaying priorities summary:', err);
+                        modalContent.innerHTML = `<div class="alert alert-danger">Error displaying summary: ${err.message}</div>`;
                     }
                 });
             }
@@ -448,32 +591,10 @@
                 loading.style.display = 'none';
             }
         });
-
-        // Load results when page loads
-        loadResults();
-
-        // Add Reset Papers button handler
-        document.getElementById('resetPapersBtn').addEventListener('click', async () => {
-            if (!confirm('Warning: This will erase all existing papers. Are you sure you want to proceed?')) {
-                return;
-            }
-            try {
-                const response = await fetch('/reset-existing-papers', {
-                    method: 'POST'
-                });
-                const data = await response.json();
-                alert(data.message || 'Reset completed');
-                location.reload(); // Reload page to reflect the empty results
-            } catch (error) {
-                alert('Error resetting papers: ' + error.message);
-            }
-        });
-
-        // Add handler for the new detailed export button
-        document.getElementById('exportDetailedResultsBtn').addEventListener('click', () => {
-            // Redirect browser to the new detailed export endpoint
-            window.location.href = '/export-detailed-results';
-        });
     </script>
 </body>
+<<<<<<< HEAD
 </html>
+=======
+</html>
+>>>>>>> 876697b54883ff46fc077c7018b89a8315a272f3
