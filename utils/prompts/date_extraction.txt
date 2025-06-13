@@ -1,0 +1,8 @@
+Extract ONLY the document date from this text.\nLook for
+meeting dates, publication dates, or any dates that appear
+to be when the document was created.\n\nReturn the date in
+YYYY-MM-DD format if possible, or any clear date format you
+find.\nIf multiple dates are found, choose the one most likely
+to be the document date.\n\nRespond with ONLY the date and
+nothing else. If no date is found, respond with \"Unknown\".\n\n
+Text:\n

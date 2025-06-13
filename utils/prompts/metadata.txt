@@ -1,0 +1,19 @@
+Extract the following metadata from this document text:
+1. Document Date: Find the most likely meeting or document date (in YYYY-MM-DD format if possible)
+2. Document Title: Extract the main title of the document
+3. Organization Name: Identify the NHS organization or trust name
+
+Respond in this EXACT format (including the triple backticks):
+```date
+YYYY-MM-DD or any found date format
+```
+```title
+DOCUMENT TITLE
+```
+```organization
+ORGANIZATION NAME
+```
+
+If any field cannot be found, use "Unknown" as the value.
+
+Text to analyze (first 2000 characters):

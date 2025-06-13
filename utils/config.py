@@ -14,6 +14,7 @@ class Config:
 
     # Crawl4AI settings
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
     # Simulation mode - use when no valid API key is available
     SIMULATE_CRAWLER = os.getenv("SIMULATE_CRAWLER", "False").lower() in (
